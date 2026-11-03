@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { requireTenant, type Role } from "@/lib/tenancy/context";
 import { signOut } from "../auth/actions";
 import { SubmitButton } from "../auth/_components/ui";
 
 export const metadata: Metadata = { title: "Dashboard · SME ERP" };
+
+const ROLE_LABELS: Record<Role, string> = {
+  owner: "Owner",
+  manager: "Manager",
+  employee: "Employee",
+};
 
 export default function DashboardPage() {
   return (
@@ -18,19 +23,8 @@ export default function DashboardPage() {
 }
 
 async function Dashboard() {
-  const supabase = await createClient();
-  // getUser() validates the session with Supabase Auth — never trust
-  // getSession() alone for authorization on the server.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) redirect("/auth/login");
-
-  const fullName =
-    typeof user.user_metadata?.full_name === "string"
-      ? user.user_metadata.full_name
-      : null;
+  // Redirects to /auth/login (no user) or /onboarding/organization (no org).
+  const { organization, role } = await requireTenant();
 
   return (
     <div className="space-y-6">
@@ -41,8 +35,17 @@ async function Dashboard() {
         </form>
       </header>
       <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-lg">Welcome, {fullName || user.email}</p>
-        <p className="mt-2 text-zinc-500">Authentication is working.</p>
+        <p className="text-lg font-medium">Welcome to SME ERP</p>
+        <dl className="mt-4 space-y-1 text-zinc-600 dark:text-zinc-400">
+          <div>
+            <dt className="inline font-medium">Organization: </dt>
+            <dd className="inline">{organization.name}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium">Role: </dt>
+            <dd className="inline">{ROLE_LABELS[role]}</dd>
+          </div>
+        </dl>
       </section>
     </div>
   );

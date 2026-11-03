@@ -39,6 +39,8 @@ export function Field({
   defaultValue,
   error,
   minLength,
+  maxLength,
+  required = true,
 }: {
   label: string;
   name: string;
@@ -47,16 +49,13 @@ export function Field({
   defaultValue?: string;
   error?: string;
   minLength?: number;
+  maxLength?: number;
+  required?: boolean;
 }) {
   const errorId = `${name}-error`;
   return (
     <div>
-      <label
-        htmlFor={name}
-        className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-      >
-        {label}
-      </label>
+      <FieldLabel name={name} label={label} required={required} />
       <input
         id={name}
         name={name}
@@ -64,17 +63,85 @@ export function Field({
         autoComplete={autoComplete}
         defaultValue={defaultValue}
         minLength={minLength}
+        maxLength={maxLength}
+        required={required}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        className={INPUT_CLASS}
+      />
+      <FieldError id={errorId} error={error} />
+    </div>
+  );
+}
+
+export function Select({
+  label,
+  name,
+  options,
+  defaultValue,
+  error,
+}: {
+  label: string;
+  name: string;
+  options: string[];
+  defaultValue?: string;
+  error?: string;
+}) {
+  const errorId = `${name}-error`;
+  return (
+    <div>
+      <FieldLabel name={name} label={label} required />
+      <select
+        id={name}
+        name={name}
+        defaultValue={defaultValue}
         required
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
-        className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300"
-      />
-      {error && (
-        <p id={errorId} className="mt-1 text-sm text-red-600">
-          {error}
-        </p>
-      )}
+        className={INPUT_CLASS}
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+      <FieldError id={errorId} error={error} />
     </div>
+  );
+}
+
+const INPUT_CLASS =
+  "mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
+
+function FieldLabel({
+  name,
+  label,
+  required,
+}: {
+  name: string;
+  label: string;
+  required: boolean;
+}) {
+  return (
+    <label
+      htmlFor={name}
+      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+    >
+      {label}
+      {!required && (
+        <span className="font-normal text-zinc-500"> (optional)</span>
+      )}
+    </label>
+  );
+}
+
+function FieldError({ id, error }: { id: string; error?: string }) {
+  if (!error) return null;
+  return (
+    <p id={id} className="mt-1 text-sm text-red-600">
+      {error}
+    </p>
   );
 }
 

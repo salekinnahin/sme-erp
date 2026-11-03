@@ -1,3 +1,23 @@
+# SME ERP
+
+A lightweight multi-tenant ERP for small businesses, built with Next.js 16 and Supabase.
+
+## Project Docs (humans and AI agents)
+
+- [AGENTS.md](AGENTS.md): engineering rules for all contributors and agents (Codex, Claude Code, ChatGPT)
+- [CLAUDE.md](CLAUDE.md): Claude Code entry point
+- [docs/PRODUCT.md](docs/PRODUCT.md): Version 1 scope and non-scope
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): stack, layering, auth flow
+- [docs/DATA_MODEL.md](docs/DATA_MODEL.md): planned data model
+- [docs/SECURITY.md](docs/SECURITY.md): security rules
+- [docs/DECISIONS.md](docs/DECISIONS.md): decision log
+- [docs/ROADMAP.md](docs/ROADMAP.md): delivery phases
+- [tasks/current.md](tasks/current.md): the active task
+
+Environment: copy the required variable names listed in `docs/ARCHITECTURE.md` into `.env.local`. Never commit that file.
+
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
