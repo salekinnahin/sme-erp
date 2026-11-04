@@ -7,8 +7,8 @@ import { getCustomer } from "@/lib/customers/customers";
 import { canCustomer } from "@/lib/customers/permissions";
 import { formatDateTime } from "@/lib/format";
 import { StatusActions } from "../_components/status-actions";
-import { StatusBadge } from "../_components/status-badge";
-import { SECONDARY_LINK, TEXT_LINK } from "../_components/styles";
+import { StatusBadge } from "@/app/_components/status-badge";
+import { SECONDARY_LINK, TEXT_LINK } from "@/app/_components/styles";
 
 export const metadata: Metadata = { title: "Customer · SME ERP" };
 

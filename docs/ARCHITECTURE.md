@@ -51,11 +51,13 @@ app/
     confirm/route.ts         Email confirmation handler (token_hash or PKCE code)
     login/, sign-up/, forgot-password/
     _components/ui.tsx       Shared auth UI (AuthCard, SubmitButton, …)
-  _components/               Shared non-auth UI (AppHeader navigation, TenantLoadError)
+  _components/               Shared non-auth UI (AppHeader navigation, TenantLoadError,
+                             StatusBadge, ListPagination, link styles)
   customers/                 Customer list, new, [id] detail, [id]/edit
     actions.ts               Server Actions: create, update, set status
-    _components/             Customer form, status badge, deactivate/reactivate control
+    _components/             Customer form, deactivate/reactivate control
     error.tsx, [id]/not-found.tsx
+  vendors/                   Vendor list, new, [id] detail, [id]/edit (same structure as customers)
   dashboard/page.tsx         Authenticated landing page (requires an organization)
   dashboard/error.tsx        Error boundary: retryable "couldn't load organization" message
   onboarding/error.tsx       Same error boundary for onboarding
@@ -69,12 +71,13 @@ lib/
   tenancy/context.ts         getUser / requireUser / getTenant / requireTenant
   organizations/             Organization validation + createOrganization()
   customers/                 validation.ts, permissions.ts, customers.ts (domain functions)
+  vendors/                   validation.ts, permissions.ts, vendors.ts (domain functions)
   validation/fields.ts       Shared field rules (email, phone, UUID, optional text)
   validation/text.ts         Whitespace set and code-point length, matching SQL
   format.ts                  Date formatting in the organization's time zone
 supabase/
   migrations/                SQL migrations
-  tests/                     SQL tests (tenant isolation, customers), run in the SQL Editor
+  tests/                     SQL tests (tenant isolation, customers, vendors), run in the SQL Editor
 lib/**/*.test.ts             Vitest unit tests, next to the code they test
 proxy.ts                     Session refresh + optimistic route protection
 ```
@@ -86,7 +89,7 @@ Conventions for new code:
 
 ## Tenant-Owned Module Pattern (customers)
 
-Later master-data modules (vendors, products) should follow the customers module. See DECISIONS 013.
+Master-data modules follow the customers module. See DECISIONS 013. Vendors (`lib/vendors/`, `app/vendors/`, migration `20261104050000_vendors.sql`) are the second module built on it; products should follow the same shape. Generic presentational pieces (status badge, pagination, link styles) live in `app/_components/`; entity-specific forms and status controls stay in each module.
 
 | Layer | Customers example |
 | --- | --- |
@@ -102,7 +105,7 @@ Later master-data modules (vendors, products) should follow the customers module
 ## Request and Auth Flow
 
 1. `proxy.ts` runs on every non-static request. It calls `updateSession()`, which refreshes the Supabase session cookies and returns the user.
-2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding` and `/customers`, and authenticated users are sent away from the login and sign-up pages.
+2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding`, `/customers` and `/vendors`, and authenticated users are sent away from the login and sign-up pages.
 3. Every protected page, Server Action and Route Handler must re-check the user server-side. Use `requireUser()` or `requireTenant()` from `lib/tenancy/context.ts` (built on `supabase.auth.getUser()`). Never rely on `getSession()` or on client state for authorization.
 4. Organization routing happens in pages, not the proxy. `requireTenant()` sends users with no active membership to `/onboarding/organization`, and the onboarding page sends members to `/dashboard`. If the membership lookup fails, it throws. The segment's `error.tsx` then shows a generic message with a Retry button. It never redirects and never shows tenant data.
 5. Supabase clients are created per request. Never share one across requests.
@@ -119,6 +122,6 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 ## Not Yet Implemented
 
 - Invitations, member management, role changes
-- ERP domain tables other than `customers`
+- ERP domain tables other than `customers` and `vendors`
 - Supabase Storage usage
 - Automated UI / end-to-end tests

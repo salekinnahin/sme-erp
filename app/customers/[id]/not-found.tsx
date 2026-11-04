@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { TEXT_LINK } from "../_components/styles";
+import { TEXT_LINK } from "@/app/_components/styles";
 
 // Shown for unknown IDs, malformed IDs and other organizations' customers
 // alike, so the page never reveals whether a customer exists elsewhere.

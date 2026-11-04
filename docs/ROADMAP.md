@@ -9,7 +9,7 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 - [x] Email/password authentication (sign-up, sign-in, sign-out, email confirmation)
 - [x] AI agent context: `AGENTS.md`, `CLAUDE.md`, `docs/`, `tasks/`
 - [x] Migrations folder (`supabase/migrations/`); the CLI workflow is not set up yet
-- [ ] Test setup
+- [x] Test setup (Vitest for TypeScript; SQL suites in `supabase/tests/`)
 - [x] Remove the temporary `app/test-supabase` diagnostic page
 
 ## Phase 1 — Tenancy and Access
@@ -19,12 +19,12 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 - [x] RLS foundation and helper functions
 - [ ] User management (invite, role change, remove)
 - [ ] Audit log foundation
-- [ ] App shell and navigation (minimal header with Dashboard and Customers links exists)
+- [ ] App shell and navigation (minimal header with Dashboard, Customers and Vendors links exists)
 
 ## Phase 2 — Master Data
 
 - [x] Customers
-- [ ] Vendors
+- [x] Vendors
 - [ ] Products/services
 
 ## Phase 3 — Inventory Core

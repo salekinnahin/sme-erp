@@ -12,8 +12,9 @@ import {
   type CustomerStatusFilter,
 } from "@/lib/customers/validation";
 import { formatDate } from "@/lib/format";
-import { StatusBadge } from "./_components/status-badge";
-import { PRIMARY_LINK, SECONDARY_LINK, TEXT_LINK } from "./_components/styles";
+import { ListPagination } from "@/app/_components/list-pagination";
+import { StatusBadge } from "@/app/_components/status-badge";
+import { PRIMARY_LINK, SECONDARY_LINK, TEXT_LINK } from "@/app/_components/styles";
 
 export const metadata: Metadata = { title: "Customers · SME ERP" };
 
@@ -148,7 +149,7 @@ async function CustomerList({
               </tbody>
             </table>
           </div>
-          <Pagination
+          <ListPagination
             page={page}
             pageSize={pageSize}
             shown={items.length}
@@ -212,54 +213,5 @@ function EmptyState({
     <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400">
       {body}
     </div>
-  );
-}
-
-function Pagination({
-  page,
-  pageSize,
-  shown,
-  total,
-  prevHref,
-  nextHref,
-}: {
-  page: number;
-  pageSize: number;
-  shown: number;
-  total: number;
-  prevHref: string | null;
-  nextHref: string | null;
-}) {
-  const from = (page - 1) * pageSize + 1;
-  const to = from + shown - 1;
-  return (
-    <nav
-      aria-label="Pagination"
-      className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-400"
-    >
-      <p>
-        Showing {from}–{to} of {total}
-      </p>
-      <div className="flex gap-2">
-        {prevHref ? (
-          <Link href={prevHref} className={SECONDARY_LINK}>
-            Previous
-          </Link>
-        ) : (
-          <span aria-disabled="true" className={`${SECONDARY_LINK} pointer-events-none opacity-50`}>
-            Previous
-          </span>
-        )}
-        {nextHref ? (
-          <Link href={nextHref} className={SECONDARY_LINK}>
-            Next
-          </Link>
-        ) : (
-          <span aria-disabled="true" className={`${SECONDARY_LINK} pointer-events-none opacity-50`}>
-            Next
-          </span>
-        )}
-      </div>
-    </nav>
   );
 }

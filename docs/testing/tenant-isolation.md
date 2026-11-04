@@ -58,7 +58,7 @@ Run after any change to `customers`, its functions or policies, `lib/customers/`
 
 ### 3.1 Database test (automated SQL)
 
-File: `supabase/tests/customers.sql`. Run it like `tenant_isolation.sql`, but as a separate run in the SQL Editor. Expected last result: `ALL CUSTOMER CHECKS PASSED`. It is rolled back.
+File: `supabase/tests/customers.sql` (needs migrations up to `20261104060000_align_customer_search_trim.sql`). Run it like `tenant_isolation.sql`, but as a separate run in the SQL Editor. Expected last result: `ALL CUSTOMER CHECKS PASSED`. It is rolled back.
 
 It checks:
 
@@ -79,6 +79,7 @@ It checks:
 - user B cannot read, update, deactivate, reactivate or delete Customer A, or create a customer with Organization A's ID
 - `set_customer_status` fails identically (`P0002: customer not found`) for Customer A's ID and for an unknown ID, and its definition takes no explicit row lock (`FOR UPDATE`/`FOR SHARE`)
 - `list_customers` with Organization A's ID returns nothing for user B, whatever the search, filter or page
+- a search padded with U+00A0, U+3000, U+2003, U+0085 or U+FEFF is trimmed with the shared whitespace set (including phone-digit searches), and a whitespace-only search lists everything
 - search (name, company, email, phone, phone digits) and the status filter stay within the tenant; `%` and `_` are literal; pages are disjoint; `total_count` is stable; limit and offset are clamped
 
 Optional lock check (needs two `psql` sessions; the SQL Editor commits each run). Session 1, as `postgres`: `begin; select 1 from public.customers where id = '<Customer A id>' for update;` and leave it open. Session 2: `begin; set local role authenticated; select set_config('request.jwt.claims', '{"sub":"<User B id>","role":"authenticated"}', true); select public.set_customer_status('<Customer A id>', 'inactive');`. Expected: it returns `customer not found` at once, without waiting. Then roll back both sessions.
@@ -119,3 +120,23 @@ console.log(await (await fetch(`${url}/rest/v1/rpc/list_customers`, { method: "P
   body: JSON.stringify({ p_organization_id: orgA }) })).json());                                                     // []
 console.log(await (await fetch(`${url}/rest/v1/customers?id=eq.${custA}`, { method: "DELETE", headers: h })).status); // 401/403
 ```
+
+## 4. Vendors
+
+Run after any change to `vendors`, its functions or policies, `lib/vendors/`, or `app/vendors/`. Vendors follow the customer pattern, so the checks mirror section 3.
+
+### 4.1 Database test (automated SQL)
+
+File: `supabase/tests/vendors.sql`. Run it as a separate run in the SQL Editor, after migration `20261104050000_vendors.sql`. Expected last result: `ALL VENDOR CHECKS PASSED`. It is rolled back.
+
+It checks everything listed in 3.1 for `vendors`, `list_vendors` and `set_vendor_status` (the error for other-tenant and unknown IDs is `P0002: vendor not found`), plus:
+
+- a search padded with U+00A0 / U+3000 is trimmed with the shared whitespace set; a whitespace-only search lists everything
+- customers never appear in `list_vendors`, and `set_vendor_status` with a customer ID is "not found"
+- a manager whose membership is disabled later loses read, list, create, update and status access at once
+
+### 4.2 UI test (manual)
+
+Repeat the steps in 3.2 under **Vendors** (`/vendors`), with these expected texts: "No vendors yet." / "Add your first vendor", "Vendor name is required.", "Vendor not found", "No vendors match your search.". The list has no payable balance column, and the detail page has no purchase history.
+
+API probe: the probe in 3.2 with `vendors`, `set_vendor_status` (`p_vendor_id`) and `list_vendors`. Every result is empty or an error.

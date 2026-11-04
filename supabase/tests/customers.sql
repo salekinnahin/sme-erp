@@ -3,7 +3,7 @@
 --
 -- How to run: paste this into the Supabase SQL Editor (it runs as `postgres`)
 -- after applying the migrations up to
--- 20261104030000_harden_customer_validation.sql.
+-- 20261104060000_align_customer_search_trim.sql.
 -- Everything runs in one transaction that is ROLLED BACK at the end, so no
 -- data is left behind. Run it separately from tenant_isolation.sql.
 --
@@ -253,7 +253,7 @@ Line 2')
   end;
 
   -- Helpers agree with lib/validation/text.ts
-  if public.trim_whitespace(E' \t\n\r\u000b\u000c\u0085        　﻿Acme  ') <> 'Acme' then
+  if public.trim_whitespace(E' \t\n\r\u000b\u000c\u0085      　﻿Acme  ') <> 'Acme' then
     raise exception 'FAIL: trim_whitespace does not strip the whole whitespace set';
   end if;
   if public.trim_whitespace(E'​Acme') <> E'​Acme' then
@@ -654,6 +654,21 @@ begin
   -- Digits typed without formatting still match "+880 1711-000000"
   if (select count(*) from public.list_customers(v_org_a, '01711000000', null, 100, 0)) <> 1 then
     raise exception 'FAIL: search by phone digits failed';
+  end if;
+
+  -- The search is trimmed with the shared whitespace set (DECISIONS 014,
+  -- migration 20261104060000_align_customer_search_trim.sql), not btrim()
+  if (select count(*) from public.list_customers(v_org_a, E' ACME　', null, 100, 0)) <> 2 then
+    raise exception 'FAIL: search padded with U+00A0 / U+3000 is not trimmed';
+  end if;
+  if (select count(*) from public.list_customers(v_org_a, E' buyer@acme﻿', null, 100, 0)) <> 1 then
+    raise exception 'FAIL: search padded with U+2003 / U+FEFF is not trimmed';
+  end if;
+  if (select count(*) from public.list_customers(v_org_a, E'\u008501711000000 ', null, 100, 0)) <> 1 then
+    raise exception 'FAIL: padded phone-digit search is not trimmed';
+  end if;
+  if (select coalesce(max(total_count), 0) from public.list_customers(v_org_a, E' 　', null, 100, 0)) <> 6 then
+    raise exception 'FAIL: a whitespace-only search does not list everything';
   end if;
 
   -- LIKE wildcards are literal

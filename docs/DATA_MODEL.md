@@ -1,6 +1,6 @@
 # Data Model
 
-> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
+> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
 
 ## Global Rules
 
@@ -77,13 +77,44 @@ Access rules:
   - UPDATE: the editable fields only (`name`, `company_name`, `phone`, `email`, `address`, `tax_number`, `notes`).
   - `status`, `created_by` and `created_at` are never client-writable. There is no DELETE privilege.
 - `public.set_customer_status(customer_id, status)`: the only way to change status. Allowed for owners and managers. Raises `P0002` for missing or other-tenant customers and `42501` for other roles. The customer is looked up only through the caller's active membership, without a row lock. The row lock is taken only by the final `UPDATE`, on an authorized row, so other tenants' locked rows can't cause a wait.
-- `public.list_customers(org_id, search, status, limit, offset)`: `SECURITY INVOKER` (RLS applies). Search, status filter and pagination, with `total_count`. Search matches name, company, email and phone (case-insensitive substring, wildcards literal), plus phone digits.
+- `public.list_customers(org_id, search, status, limit, offset)`: `SECURITY INVOKER` (RLS applies). Search, status filter and pagination, with `total_count`. Search matches name, company, email and phone (case-insensitive substring, wildcards literal), plus phone digits. The search term is trimmed with `public.trim_whitespace()` (the shared set, DECISIONS 014) since migration `20261104060000_align_customer_search_trim.sql`; before that it used `btrim()`, which strips ASCII spaces only.
+
+### `vendors` (implemented)
+
+Follows the tenant-owned entity pattern established by `customers` (DECISIONS 013, 014; ARCHITECTURE § Tenant-Owned Module Pattern). Same columns, types and rules as `customers`:
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key, `gen_random_uuid()` |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade. Set on insert only |
+| `name` | text, not null | Trimmed, 1–200 code points |
+| `company_name` | text | Optional. Trimmed, 1–200 |
+| `phone` | text | Optional. Same rule as customers and organizations (≤ 50, at least 6 digits) |
+| `email` | text | Optional. Lowercase, ≤ 320, no whitespace anywhere, `local@domain.tld` |
+| `address` | text | Optional. Trimmed, 1–500 |
+| `tax_number` | text | Optional (tax / VAT / BIN number). Trimmed, 1–100 |
+| `notes` | text | Optional. Trimmed, 1–2000 |
+| `status` | text, not null | `active` (default) or `inactive` |
+| `created_by` | uuid | → `auth.users(id)` on delete set null. Defaults to `auth.uid()` |
+| `created_at`, `updated_at` | timestamptz, not null | `updated_at` is maintained by the `set_updated_at` trigger |
+
+- CHECK constraints use `public.text_is_trimmed()` / `public.text_has_whitespace()` from the start (the customers hardening migration's helpers), so there are no `NOT VALID` constraints to clean up. They mirror `lib/vendors/validation.ts`.
+- Indexes: `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(created_by)`.
+- Vendors are never deleted. They are deactivated (`status = 'inactive'`), stay editable, and stay available to future purchasing documents.
+- Duplicate names, emails and phone numbers are allowed in Version 1.
+- No payable balance is stored. Supplier balances will be derived from bills and payments (Phase 5).
+
+Access rules (same as `customers`):
+
+- RLS: select, insert and update only in organizations where the caller is an active member. Inserts must have `created_by = auth.uid()`.
+- Column privileges for `authenticated`: INSERT `organization_id` and the editable fields; UPDATE the editable fields only (`name`, `company_name`, `phone`, `email`, `address`, `tax_number`, `notes`). `status`, `created_by` and `created_at` are never client-writable. There is no DELETE privilege.
+- `public.set_vendor_status(vendor_id, status)`: the only way to change status. Owners and managers only. Raises `P0002: vendor not found` for missing, other-tenant and disabled-member cases alike, and `42501` for employees. Authorization-scoped lookup without a row lock; only the final `UPDATE` locks, on an authorized row.
+- `public.list_vendors(org_id, search, status, limit, offset)`: `SECURITY INVOKER` (RLS applies). Same search, filter and pagination behaviour as `list_customers`, including trimming the search with `public.trim_whitespace()`.
 
 ### Planned
 
 | Table | Notes |
 | --- | --- |
-| `vendors` | Organization-owned |
 | `products` | Products and services. SKU is unique per organization. Do **not** treat a quantity column as authoritative stock |
 
 ## Sales

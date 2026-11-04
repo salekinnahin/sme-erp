@@ -5,6 +5,7 @@ import { SubmitButton } from "@/app/auth/_components/ui";
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/customers", label: "Customers" },
+  { href: "/vendors", label: "Vendors" },
 ] as const;
 
 /** Minimal header with navigation for signed-in pages. */
