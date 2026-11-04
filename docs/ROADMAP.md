@@ -19,11 +19,11 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 - [x] RLS foundation and helper functions
 - [ ] User management (invite, role change, remove)
 - [ ] Audit log foundation
-- [ ] App shell and navigation
+- [ ] App shell and navigation (minimal header with Dashboard and Customers links exists)
 
 ## Phase 2 — Master Data
 
-- [ ] Customers
+- [x] Customers
 - [ ] Vendors
 - [ ] Products/services
 

@@ -11,15 +11,17 @@ import { useEffect } from "react";
 export function TenantLoadError({
   error,
   retry,
+  message = "Something went wrong while loading your organization. Please try again.",
 }: {
   error: unknown;
   retry: () => void;
+  message?: string;
 }) {
   useEffect(() => {
     // Digest only: it matches the server log entry without exposing details.
     const digest =
       error instanceof Error && "digest" in error ? error.digest : undefined;
-    console.error("Failed to load organization", { digest });
+    console.error("Failed to load page data", { digest });
   }, [error]);
 
   return (
@@ -28,10 +30,7 @@ export function TenantLoadError({
         role="alert"
         className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950"
       >
-        <p className="text-zinc-700 dark:text-zinc-300">
-          Something went wrong while loading your organization. Please try
-          again.
-        </p>
+        <p className="text-zinc-700 dark:text-zinc-300">{message}</p>
         <button
           type="button"
           onClick={() => retry()}

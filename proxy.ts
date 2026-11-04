@@ -3,7 +3,7 @@ import { updateSession, withSessionCookies } from "@/lib/supabase/proxy";
 
 // Organization membership is checked server-side by the pages themselves
 // (lib/tenancy/context.ts), not here.
-const PROTECTED_PREFIXES = ["/dashboard", "/onboarding"];
+const PROTECTED_PREFIXES = ["/dashboard", "/onboarding", "/customers"];
 const GUEST_ONLY_PATHS = ["/auth/login", "/auth/sign-up"];
 
 function matches(pathname: string, prefix: string) {

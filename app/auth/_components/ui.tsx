@@ -74,6 +74,43 @@ export function Field({
   );
 }
 
+export function TextArea({
+  label,
+  name,
+  defaultValue,
+  error,
+  maxLength,
+  rows = 3,
+  required = true,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  error?: string;
+  maxLength?: number;
+  rows?: number;
+  required?: boolean;
+}) {
+  const errorId = `${name}-error`;
+  return (
+    <div>
+      <FieldLabel name={name} label={label} required={required} />
+      <textarea
+        id={name}
+        name={name}
+        rows={rows}
+        defaultValue={defaultValue}
+        maxLength={maxLength}
+        required={required}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        className={INPUT_CLASS}
+      />
+      <FieldError id={errorId} error={error} />
+    </div>
+  );
+}
+
 export function Select({
   label,
   name,

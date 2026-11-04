@@ -110,3 +110,44 @@ Status: accepted
 **Decision:** Version 1 supports a fixed list of base currencies: `BDT` (default), `USD`, `EUR`, `GBP` and `INR`. The onboarding form offers exactly this list (`SUPPORTED_CURRENCIES` in `lib/organizations/validation.ts`). `create_organization()` accepts only this list. It also re-validates the name, email, phone, address and tax number with the same rules as the Server Action, and raises `22023` on invalid input. The duplication is deliberate. The Server Action gives friendly per-field errors, and the database protects against direct RPC calls. Both must be changed together.
 
 **Consequences:** Adding a currency means updating both lists, which needs a new migration. Existing organizations are not re-validated, and no table constraint is added, because clients can only write through the function.
+
+## 013 — Tenant-owned master data: direct RLS writes, column privileges, role-checked functions
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Customers are the first tenant-owned business table. Vendors and products will follow the same shape. Unlike the tenancy tables (DECISIONS 010), master data is edited often by every role. Only a few fields or state changes are restricted. The Version 1 roles are: all roles view, create and edit customers; only owners and managers deactivate or reactivate them.
+
+**Decision:**
+
+- Clients write master-data tables directly through the Supabase API, protected by four layers:
+  1. RLS on `public.is_org_member(organization_id)`. Inserts must also have `created_by = auth.uid()`.
+  2. Column-level privileges:
+     - INSERT covers `organization_id` and the editable fields.
+     - UPDATE covers the editable fields only.
+     - `status`, `created_by` and `created_at` are never granted, and there is no DELETE privilege.
+  3. CHECK constraints that hold the field rules: trimmed values, NULL rather than `''`, lowercase email, phone format, lengths. They mirror `lib/<domain>/validation.ts`, which gives friendly per-field errors. Both must be changed together.
+  4. Server-side role checks in `lib/<domain>/permissions.ts`, applied by Server Actions and domain functions.
+- Role-restricted state changes go through a `SECURITY DEFINER` function that checks `public.has_org_role()`, for example `set_customer_status()`. Missing and other-tenant rows raise the same not-found error (`P0002`), so existence is never revealed across tenants.
+- Search and paginated lists go through a `SECURITY INVOKER` SQL function, for example `list_customers()`. RLS still applies, LIKE wildcards are escaped, and user input is never turned into a PostgREST filter string.
+- Master data is never hard-deleted in Version 1. It is deactivated with `status = 'inactive'` and remains available to historical documents.
+
+**Consequences:** Each new module needs its own migration with grants, policies and constraints, plus its own validation, permissions and domain files (see ARCHITECTURE § Tenant-Owned Module Pattern). Search uses substring `ILIKE` without trigram indexes. That is fine at SME scale, but add `pg_trgm` indexes if lists grow to tens of thousands of rows per organization. Validation is deliberately duplicated in TypeScript and SQL.
+
+## 014 — One whitespace set and code-point lengths in TypeScript and SQL
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Validation is duplicated in TypeScript and SQL (DECISIONS 012, 013), but the two layers disagreed. JavaScript `trim()`/`\s` treats U+00A0 as whitespace but not U+0085, and PostgreSQL `[[:space:]]` does the opposite (and depends on the locale). `String.length` counts UTF-16 code units, while `char_length()` counts code points, so a 200-emoji name passed the database but failed the app.
+
+**Decision:**
+
+- **Whitespace** is one explicit set: U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. This is the Unicode `White_Space` property plus U+FEFF, which JavaScript also trims. Zero-width characters such as U+200B are not whitespace. It is used for trimming, empty checks and "no whitespace" checks such as email.
+  - TypeScript: `trimText()`, `hasWhitespace()` in `lib/validation/text.ts`.
+  - SQL: `public.trim_whitespace()`, `public.text_is_trimmed()`, `public.text_has_whitespace()`.
+  - Neither layer relies on `trim()`, `\s`, `btrim()` or `[[:space:]]` for these rules.
+- **Length** is counted in Unicode code points: `charLength()` in TypeScript, `char_length()` in SQL. Limits are unchanged. Customer form fields have no HTML `maxLength`, because browsers count UTF-16 code units. Phone keeps it, because it only allows ASCII.
+- No Unicode normalization (NFC/NFKC). A combining sequence such as `e` + U+0301 counts as two characters in both layers.
+
+**Consequences:** The customers module uses these rules (migration `20261104030000_harden_customer_validation.sql`). Vendors and products should reuse them. Organization validation (`lib/organizations/validation.ts`, `create_organization()`) still uses the older `trim()`/`btrim()` and `.length` rules and should be aligned in a separate change. Changing the whitespace set means changing both files in a new migration, and re-validating the affected constraints.

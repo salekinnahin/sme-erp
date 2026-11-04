@@ -51,7 +51,11 @@ app/
     confirm/route.ts         Email confirmation handler (token_hash or PKCE code)
     login/, sign-up/, forgot-password/
     _components/ui.tsx       Shared auth UI (AuthCard, SubmitButton, …)
-  _components/               Shared non-auth UI (TenantLoadError)
+  _components/               Shared non-auth UI (AppHeader navigation, TenantLoadError)
+  customers/                 Customer list, new, [id] detail, [id]/edit
+    actions.ts               Server Actions: create, update, set status
+    _components/             Customer form, status badge, deactivate/reactivate control
+    error.tsx, [id]/not-found.tsx
   dashboard/page.tsx         Authenticated landing page (requires an organization)
   dashboard/error.tsx        Error boundary: retryable "couldn't load organization" message
   onboarding/error.tsx       Same error boundary for onboarding
@@ -64,21 +68,40 @@ lib/
   auth/errors.ts             Maps Supabase auth errors to safe user-facing messages
   tenancy/context.ts         getUser / requireUser / getTenant / requireTenant
   organizations/             Organization validation + createOrganization()
+  customers/                 validation.ts, permissions.ts, customers.ts (domain functions)
+  validation/fields.ts       Shared field rules (email, phone, UUID, optional text)
+  validation/text.ts         Whitespace set and code-point length, matching SQL
+  format.ts                  Date formatting in the organization's time zone
 supabase/
   migrations/                SQL migrations
   tests/                     SQL tests (tenant isolation), run in the SQL Editor
 proxy.ts                     Session refresh + optimistic route protection
 ```
 
-Planned conventions for new code (not yet present):
+Conventions for new code:
 
 - `lib/<domain>/` for domain logic, e.g. `lib/invoices/`, `lib/inventory/`.
-- Shared, non-auth UI components in a common components folder, created when the first one is needed.
+- Shared, non-auth UI components go in `app/_components/`. The form primitives (`Field`, `TextArea`, `Select`, `SubmitButton`, `Alert`) still live in `app/auth/_components/ui.tsx` and are used outside auth. Move them when that file next changes for another reason.
+
+## Tenant-Owned Module Pattern (customers)
+
+Later master-data modules (vendors, products) should follow the customers module. See DECISIONS 013.
+
+| Layer | Customers example |
+| --- | --- |
+| Migration | Table with `organization_id`, CHECK constraints, indexes, RLS on `is_org_member()`, column-level INSERT/UPDATE privileges, no DELETE |
+| Role-restricted change | `SECURITY DEFINER` function (`set_customer_status`). It finds the row only through the caller's active membership and role. Authorize before locking: no `SELECT … FOR UPDATE` on rows the caller may not access |
+| Search and list | `SECURITY INVOKER` SQL function (`list_customers`), so RLS still applies and user input never becomes a PostgREST filter string |
+| Validation | `lib/<domain>/validation.ts`, using `lib/validation/fields.ts` and `lib/validation/text.ts` (shared whitespace set and code-point lengths, DECISIONS 014). Mirrors the CHECK constraints, which use `text_is_trimmed()` / `text_has_whitespace()` |
+| Permissions | `lib/<domain>/permissions.ts`, with a role → action table |
+| Domain functions | `lib/<domain>/<domain>.ts`. They take the tenant from `requireTenant()`. Reads throw on error; writes return `{ ok, reason }` |
+| Server Actions | `app/<domain>/actions.ts`. They call `requireTenant()`, validate, call the domain function, and map reasons to safe messages |
+| Pages | Request-time data inside `<Suspense>`, `notFound()` for missing or other-tenant IDs, `error.tsx` built on `TenantLoadError` |
 
 ## Request and Auth Flow
 
 1. `proxy.ts` runs on every non-static request. It calls `updateSession()`, which refreshes the Supabase session cookies and returns the user.
-2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, and authenticated users are sent away from the login and sign-up pages.
+2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding` and `/customers`, and authenticated users are sent away from the login and sign-up pages.
 3. Every protected page, Server Action and Route Handler must re-check the user server-side. Use `requireUser()` or `requireTenant()` from `lib/tenancy/context.ts` (built on `supabase.auth.getUser()`). Never rely on `getSession()` or on client state for authorization.
 4. Organization routing happens in pages, not the proxy. `requireTenant()` sends users with no active membership to `/onboarding/organization`, and the onboarding page sends members to `/dashboard`. If the membership lookup fails, it throws. The segment's `error.tsx` then shows a generic message with a Retry button. It never redirects and never shows tenant data.
 5. Supabase clients are created per request. Never share one across requests.
@@ -95,6 +118,6 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 ## Not Yet Implemented
 
 - Invitations, member management, role changes
-- Any ERP domain tables
+- ERP domain tables other than `customers`
 - Supabase Storage usage
 - Automated tests
