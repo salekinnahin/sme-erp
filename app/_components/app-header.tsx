@@ -6,6 +6,7 @@ const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/customers", label: "Customers" },
   { href: "/vendors", label: "Vendors" },
+  { href: "/products", label: "Products" },
 ] as const;
 
 /** Minimal header with navigation for signed-in pages. */

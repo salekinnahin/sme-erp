@@ -19,13 +19,13 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 - [x] RLS foundation and helper functions
 - [ ] User management (invite, role change, remove)
 - [ ] Audit log foundation
-- [ ] App shell and navigation (minimal header with Dashboard, Customers and Vendors links exists)
+- [ ] App shell and navigation (minimal header with Dashboard, Customers, Vendors and Products links exists)
 
 ## Phase 2 — Master Data
 
 - [x] Customers
 - [x] Vendors
-- [ ] Products/services
+- [x] Products/services (with flat categories; no stock yet)
 
 ## Phase 3 — Inventory Core
 

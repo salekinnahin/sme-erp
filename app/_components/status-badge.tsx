@@ -1,4 +1,4 @@
-/** Status shared by master-data records (customers, vendors). */
+/** Status shared by master-data records (customers, vendors, products, categories). */
 type RecordStatus = "active" | "inactive";
 
 const STYLES: Record<RecordStatus, string> = {

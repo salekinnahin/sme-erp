@@ -164,3 +164,21 @@ Status: accepted
 **Consequences:** The same Unicode email input can be stored differently through the app and a direct organization RPC call. Differences in case expansion can also affect acceptance near the email length limit, and customer email constraints can disagree with app-normalized values under some database locales. ASCII email casing is unaffected. Existing tests do not establish Unicode casing parity between TypeScript and SQL.
 
 **Follow-up:** Define one deterministic email casing policy and implement it consistently in both layers. Add paired TypeScript and SQL regression cases for dotted capital I, Greek final sigma, and the email length boundary. Any database behavior change must use a new migration and assess existing email values before altering them.
+
+## 016 — Products: SKU uniqueness, money precision, types, units, same-tenant categories
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Products are the third tenant-owned master-data module (DECISIONS 013, 014) and the base for quotations, orders, invoices, purchasing and inventory. They add rules that customers and vendors don't have: an identifying SKU, prices, a product type that decides inventory eligibility, units, and a link to a second tenant-owned table (categories).
+
+**Decision:**
+
+- **Product types** are fixed: `inventory` (will be stock-tracked), `non_inventory` (physical, not stock-tracked) and `service`. Only `inventory` products have a reorder level; for the others `reorder_level` is 0, enforced by a CHECK constraint, and the app forces it to 0.
+- **SKU** is required, trimmed with the shared whitespace set, at most 100 code points, and stored as typed. It is unique per organization, **ignoring case**, through a unique index on `(organization_id, lower(sku))`. The same SKU may exist in different organizations. There is no SKU auto-generation. Duplicates are detected only by the database (`23505`), which the app maps to a field error, so there is no TypeScript copy of the case rule. Category names follow the same rule (unique per organization ignoring case, at most 100 code points).
+- **Units** are a fixed list (`pcs`, `unit`, `kg`, `g`, `litre`, `ml`, `box`, `pack`, `set`, `hour`, `day`, `service`), held in `PRODUCT_UNITS` and in a CHECK constraint. There is no unit-management module and no unit conversion.
+- **Money**: prices are `numeric(18,2)` in the organization's base currency (no per-product currency, no price lists). The reorder level is `numeric(18,3)` so weight and volume units can use fractions. Values are read as text (`::text`), validated and written as decimal strings, and formatted by string (`formatMoney()`), never via JavaScript numbers. The app rejects extra decimals instead of rounding. CHECK constraints reject negatives and `NaN` (which `numeric` accepts and which compares greater than every number).
+- **Categories belong to the same organization** as their products through a composite foreign key `(organization_id, category_id)` → `product_categories(organization_id, id)`. Foreign-key checks bypass RLS, so a plain `category_id` foreign key would let one tenant link (and probe) another tenant's category IDs. Other-tenant and unknown category IDs fail with the same `23503`.
+- **Product type changes are allowed** while there is no stock data. When stock movements are added (Phase 3), changing the type of a product that has movements must be restricted or handled explicitly.
+
+**Consequences:** Adding a unit or product type needs a new migration and a change to `lib/products/validation.ts`. Case-insensitive uniqueness uses PostgreSQL `lower()` under the database collation: ASCII SKUs behave the same everywhere, but non-ASCII case folding depends on the collation (see DECISIONS 015), and changing the collation would require rebuilding these indexes. Future modules that link two tenant-owned tables should use the same composite foreign key pattern. Future transaction lines must snapshot product name, SKU and price (DECISIONS 008).

@@ -1,13 +1,13 @@
 # Data Model
 
-> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
+> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. `product_categories` and `products` exist, created by `supabase/migrations/20261104070000_products.sql`. Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
 
 ## Global Rules
 
 - Every organization-owned table has `organization_id uuid not null` referencing `organizations(id)`.
 - Every organization-owned table has RLS enabled. Policies allow access only to members of that organization.
 - Standard columns: `id uuid primary key`, `created_at timestamptz`, `updated_at timestamptz`, `created_by uuid` (references `auth.users`).
-- Money uses `numeric(14,2)` or similar exact types. Never use floating point.
+- Money uses exact decimal types, never floating point. Prices are `numeric(18,2)` in the organization's base currency (DECISIONS 016); use the same type for future money columns unless a decision says otherwise. Read money as text (`::text`) and write it as a decimal string, so the app never parses it into a JavaScript number.
 - Document numbers, such as invoice and order numbers, are unique per organization: `unique (organization_id, number)`.
 - Index `organization_id`, foreign keys, status columns, frequently filtered dates, document numbers, and SKU.
 - Schema changes are made only through migrations.
@@ -111,11 +111,58 @@ Access rules (same as `customers`):
 - `public.set_vendor_status(vendor_id, status)`: the only way to change status. Owners and managers only. Raises `P0002: vendor not found` for missing, other-tenant and disabled-member cases alike, and `42501` for employees. Authorization-scoped lookup without a row lock; only the final `UPDATE` locks, on an authorized row.
 - `public.list_vendors(org_id, search, status, limit, offset)`: `SECURITY INVOKER` (RLS applies). Same search, filter and pagination behaviour as `list_customers`, including trimming the search with `public.trim_whitespace()`.
 
-### Planned
+### `product_categories` (implemented)
 
-| Table | Notes |
-| --- | --- |
-| `products` | Products and services. SKU is unique per organization. Do **not** treat a quantity column as authoritative stock |
+A flat list of product categories per organization (no hierarchy).
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key, `gen_random_uuid()` |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade. Set on insert only |
+| `name` | text, not null | Trimmed, 1–100 code points. Unique per organization, ignoring case |
+| `status` | text, not null | `active` (default) or `inactive` |
+| `created_by` | uuid | → `auth.users(id)` on delete set null. Defaults to `auth.uid()` |
+| `created_at`, `updated_at` | timestamptz, not null | `updated_at` is maintained by the `set_updated_at` trigger |
+
+- Indexes: unique `(organization_id, lower(name))`, unique `(organization_id, id)` (target of the products composite foreign key), `(created_by)`.
+- Never deleted. Deactivating a category does not change its products. Inactive categories are not offered for new or edited products (app rule in `lib/products/products.ts`), but a product keeps an inactive category it already has.
+
+### `products` (implemented)
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key, `gen_random_uuid()` |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade. Set on insert only |
+| `name` | text, not null | Trimmed, 1–200 code points |
+| `sku` | text, not null | Trimmed, 1–100 code points, stored as typed. Unique per organization, ignoring case (`lower(sku)`). Inner spaces allowed |
+| `category_id` | uuid | Optional. Composite FK `(organization_id, category_id)` → `product_categories(organization_id, id)`, so the category always belongs to the same organization |
+| `product_type` | text, not null | `inventory`, `non_inventory` or `service` |
+| `unit` | text, not null | One of `pcs`, `unit`, `kg`, `g`, `litre`, `ml`, `box`, `pack`, `set`, `hour`, `day`, `service` |
+| `description` | text | Optional. Trimmed, 1–2000 code points |
+| `purchase_price` | numeric(18,2) | Optional. ≥ 0, not NaN. Base currency |
+| `selling_price` | numeric(18,2) | Optional. ≥ 0, not NaN. Base currency |
+| `reorder_level` | numeric(18,3), not null | Default 0. ≥ 0, not NaN. Must be 0 unless `product_type = 'inventory'` |
+| `status` | text, not null | `active` (default) or `inactive` |
+| `created_by` | uuid | → `auth.users(id)` on delete set null. Defaults to `auth.uid()` |
+| `created_at`, `updated_at` | timestamptz, not null | `updated_at` is maintained by the `set_updated_at` trigger |
+
+- There is **no stock quantity column**. Stock on hand will be derived from `stock_movements` (Phase 3, DECISIONS 007).
+- `numeric(18,2)` rounds extra decimals on input. The app rejects more than 2 price decimals (3 for the reorder level) before writing, so only a direct API call can be rounded.
+- Product type changes are allowed while no stock data exists. Once stock movements exist, changing an inventory product with movements to another type needs a rule (DECISIONS 016).
+- Indexes: unique `(organization_id, lower(sku))`, `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, category_id)`, `(created_by)`.
+- Never deleted. Inactive products stay editable and visible to historical documents; future transaction forms should offer only active products.
+- Future documents (quotations, orders, invoices, bills) must snapshot name, SKU and price on their lines (DECISIONS 008); editing a product does not change them.
+
+Access rules (same pattern as `customers` and `vendors`):
+
+- RLS on `products`: select, insert and update only in organizations where the caller is an active member. Inserts must have `created_by = auth.uid()`.
+- RLS on `product_categories`: any active member can select. Insert and update require an active `owner` or `manager` membership (`public.has_org_role`), since migration `20261104080000_restrict_product_category_writes.sql`; before it, any active member could insert and rename. Inserts must have `created_by = auth.uid()`. Employees view categories and assign active ones to products.
+- Column privileges for `authenticated`:
+  - `products` INSERT: `organization_id`, `name`, `sku`, `category_id`, `product_type`, `unit`, `description`, `purchase_price`, `selling_price`, `reorder_level`. UPDATE: the same without `organization_id`.
+  - `product_categories` INSERT: `organization_id`, `name`. UPDATE: `name`.
+  - `status`, `created_by` and `created_at` are never client-writable. There is no DELETE privilege.
+- `public.set_product_status(product_id, status)` and `public.set_product_category_status(category_id, status)`: the only way to change status. Owners and managers only. Raise `P0002` (`product not found` / `category not found`) for missing, other-tenant and disabled-member cases alike, and `42501` for employees. Authorization-scoped lookup without a row lock.
+- `public.list_products(org_id, search, status, product_type, category_id, limit, offset)`: `SECURITY INVOKER` (RLS applies). Search matches name, SKU and category name (case-insensitive substring, wildcards literal, trimmed with `public.trim_whitespace()`, capped at 100 code points). Filters by status, type and category. Newest first, id tie-breaker; limit clamped to 1–100; returns `total_count`. Prices are returned as text.
 
 ## Sales
 

@@ -140,3 +140,52 @@ It checks everything listed in 3.1 for `vendors`, `list_vendors` and `set_vendor
 Repeat the steps in 3.2 under **Vendors** (`/vendors`), with these expected texts: "No vendors yet." / "Add your first vendor", "Vendor name is required.", "Vendor not found", "No vendors match your search.". The list has no payable balance column, and the detail page has no purchase history.
 
 API probe: the probe in 3.2 with `vendors`, `set_vendor_status` (`p_vendor_id`) and `list_vendors`. Every result is empty or an error.
+
+## 5. Products and categories
+
+Run after any change to `products`, `product_categories`, their functions or policies, `lib/products/`, or `app/products/`.
+
+### 5.1 Database test (automated SQL)
+
+File: `supabase/tests/products.sql`. Run it as a separate run in the SQL Editor, after migrations `20261104070000_products.sql` and `20261104080000_restrict_product_category_writes.sql`. Expected last result: `ALL PRODUCT CHECKS PASSED`. It is rolled back.
+
+It checks:
+
+- `anon` cannot read products or categories, or call `list_products`, `set_product_status` or `set_product_category_status`
+- categories: defaults; duplicate names rejected ignoring case (insert and rename); blank, NBSP-only, U+2003-padded and 101-emoji names rejected, 100 emoji accepted; `status`, `organization_id` not client-writable; no delete; owner and manager can deactivate and reactivate, employee cannot
+- SKU: duplicate rejected in the same organization, also with different case (insert and update); the same SKU and category name allowed in Organization B; blank, NULL, NBSP/U+0085/U+FEFF-padded and 101-emoji SKUs rejected; 100 emoji and inner spaces accepted
+- name and description: shared whitespace set, code-point limits (200 / 2000), `''` rejected for description
+- product type and unit: unknown values (and `PCS`) rejected
+- prices: negative, `NaN`, `Infinity` and values over `numeric(18,2)` rejected; 0 and 9999999999999999.99 accepted; `list_products` returns prices as exact text
+- reorder level: negative, `NaN` and NULL rejected; non-zero rejected for `service` and `non_inventory`; changing an inventory product to `service` requires `reorder_level = 0`; fractional values allowed for inventory
+- an unknown category and another organization's category are both rejected with `foreign_key_violation`
+- `status`, `created_by`, `created_at`, `organization_id` not client-writable; no delete; inactive products stay editable
+- employee can create, read and edit products, read categories and assign an active one, but cannot create, rename, deactivate or reactivate categories, or change product status; manager can create, rename, deactivate and reactivate categories
+- an unrelated product edit keeps an existing inactive category
+- a disabled member, and a manager disabled later, cannot read, list, create, update or change status
+- user B cannot read, update, change status of, or delete Product A or Organization A's categories, cannot create rows with Organization A's ID, and other-tenant and unknown IDs fail identically (`P0002: product not found` / `P0002: category not found`); the status functions take no explicit row lock
+- `list_products` with Organization A's ID returns nothing for user B, whatever the search or filters
+- search by name, SKU (partial and exact, any case) and category name; `%` and `_` literal; Unicode-padded search trimmed; whitespace-only search lists everything; status, type and category filters, alone and combined; disjoint pages, stable `total_count`, clamped limit and offset
+
+### 5.2 UI test (manual)
+
+Use Users A and B and the Organization A employee from section 3.2.
+
+| # | Step | Expected |
+| --- | --- | --- |
+| 1 | As A, open **Products** in the header | "No products yet." and "Add your first product" |
+| 2 | Open **Categories**, add `Electronics`, then add `electronics` | First is added; second shows "A category with this name already exists." |
+| 3 | New product with empty name and SKU, purchase price `-5`, selling price `1.239` | Per-field errors. Nothing is created |
+| 4 | Create `Laptop`, SKU `SKU-001`, Inventory, Electronics, pcs, purchase `1000.5`, selling `1200`, reorder `5`. Double-click Create | Button shows "Creating…". Lands on the detail page: prices `BDT 1,000.50` / `BDT 1,200.00`, reorder level `5 pcs`. One product exists |
+| 5 | Create another product with SKU `sku-001` | "This SKU is already used by another product." |
+| 6 | Switch the type to Service on the form | The Reorder level field disappears. After saving, the detail page has no reorder level |
+| 7 | Edit the product, change category and prices, save | Detail shows the new values; "Last updated" changes |
+| 8 | Deactivate (confirm) and reactivate | Inactive badge and note, then Active again |
+| 9 | Deactivate the `Electronics` category, then open New product | `Electronics` is not offered. Editing a product already in it shows `Electronics (inactive)` |
+| 10 | Add 26+ products, page through; search by name, SKU and category name; filter by status, type and category | 25 per page, newest first; filters kept across pages; only Organization A rows |
+| 11 | As B, open `/products/<Product A id>` and its `/edit`; search for `SKU-001` | "Product not found"; B's own `SKU-001` (if created) only |
+| 12 | As the employee, open a product and the categories page | Product Edit shown; no Deactivate / Reactivate. Categories page lists categories with no add form, Rename or status buttons. The product form link says "View categories" |
+| 14 | Deactivate a product's category, then edit only that product's description and save | The edit form shows the category as "(inactive)"; after saving, the product still has it |
+| 13 | Open `/products/not-a-uuid` | "Product not found" |
+
+API probe: as in 3.2, with `products`, `set_product_status` (`p_product_id`), `set_product_category_status` (`p_category_id`) and `list_products`. Also try a `POST` to `products` in B's organization with `category_id` set to an Organization A category ID: expect a foreign-key error, the same as for a random UUID.
