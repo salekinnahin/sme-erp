@@ -2,7 +2,8 @@
 -- Tenant isolation test for organizations / organization_members / profiles.
 --
 -- How to run: paste this into the Supabase SQL Editor (it runs as `postgres`)
--- after applying the migrations. Everything runs in one transaction that is
+-- after applying the migrations (up to
+-- 20261104040000_align_organization_validation.sql). Everything runs in one transaction that is
 -- ROLLED BACK at the end, so no data is left behind.
 --
 -- It simulates real API users by switching to the `authenticated` role and
@@ -19,7 +20,8 @@ begin;
 -- Fixture users. The on_auth_user_created trigger creates their profiles.
 insert into auth.users (id, email, raw_user_meta_data) values
   ('aaaaaaaa-0000-4000-8000-000000000001', 'tenant-test-a@example.com', '{"full_name":"User A"}'),
-  ('bbbbbbbb-0000-4000-8000-000000000002', 'tenant-test-b@example.com', '{"full_name":"User B"}');
+  ('bbbbbbbb-0000-4000-8000-000000000002', 'tenant-test-b@example.com', '{"full_name":"User B"}'),
+  ('cccccccc-0000-4000-8000-000000000003', 'tenant-test-c@example.com', '{"full_name":"User C"}');
 
 do $$ begin
   if (select full_name from public.profiles where id = 'aaaaaaaa-0000-4000-8000-000000000001') is distinct from 'User A' then
@@ -78,6 +80,48 @@ begin
   begin
     perform public.create_organization('   ', 'BDT', 'Asia/Dhaka');
     raise exception 'FAIL: blank name accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  -- Unicode whitespace (DECISIONS 014): NBSP, U+0085, U+2003, U+FEFF only
+  begin
+    perform public.create_organization(chr(160) || chr(160), 'BDT', 'Asia/Dhaka');
+    raise exception 'FAIL: NBSP-only name accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  begin
+    perform public.create_organization(chr(133), 'BDT', 'Asia/Dhaka');
+    raise exception 'FAIL: U+0085-only name accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  begin
+    perform public.create_organization(chr(8195) || ' ' || chr(65279), 'BDT', 'Asia/Dhaka');
+    raise exception 'FAIL: U+2003/U+FEFF-only name accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  -- 201 emoji = 201 code points (402 UTF-16 units)
+  begin
+    perform public.create_organization(repeat(chr(128512), 201), 'BDT', 'Asia/Dhaka');
+    raise exception 'FAIL: 201-emoji name accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  begin
+    perform public.create_organization('Org A', 'BDT', 'Asia/Dhaka', 'a' || chr(160) || 'b@example.com');
+    raise exception 'FAIL: email with inner NBSP accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  begin
+    perform public.create_organization('Org A', 'BDT', 'Asia/Dhaka', 'a' || chr(8195) || 'b@example.com');
+    raise exception 'FAIL: email with inner U+2003 accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  begin
+    perform public.create_organization('Org A', 'BDT', 'Asia/Dhaka', 'a' || chr(133) || 'b@example.com');
+    raise exception 'FAIL: email with inner U+0085 accepted';
+  exception when invalid_parameter_value then null;
+  end;
+  begin
+    perform public.create_organization('Org A', 'BDT', 'Asia/Dhaka', null, '+880' || chr(160) || '1711000000');
+    raise exception 'FAIL: phone with inner NBSP accepted';
   exception when invalid_parameter_value then null;
   end;
   begin
@@ -139,12 +183,29 @@ begin
     raise exception 'FAIL: a rejected call created an organization';
   end if;
 
+  -- Edge whitespace from the shared set (U+0085, U+2003, NBSP, U+FEFF, tab)
+  -- is trimmed from every text field.
   v_org := public.create_organization(
-    '  Org A  ', 'bdt', 'Asia/Dhaka', '  A@Example.com ', ' +880 1711-000000 ');
+    chr(133) || chr(8195) || '  Org A  ' || chr(160) || chr(65279),
+    chr(9) || 'bdt' || chr(160),
+    ' Asia/Dhaka' || chr(8195),
+    chr(160) || ' A@Example.com ' || chr(133),
+    chr(8195) || ' +880 1711-000000 ' || chr(65279),
+    chr(133) || ' Road 1 ' || chr(160),
+    chr(65279) || ' TIN-1 ' || chr(8195));
   perform set_config('test.org_a', v_org::text, true);
 
   if (select name from public.organizations where id = v_org) is distinct from 'Org A' then
     raise exception 'FAIL: organization name not trimmed or not readable by owner';
+  end if;
+  if (select timezone from public.organizations where id = v_org) is distinct from 'Asia/Dhaka' then
+    raise exception 'FAIL: time zone not trimmed';
+  end if;
+  if (select address from public.organizations where id = v_org) is distinct from 'Road 1' then
+    raise exception 'FAIL: address not trimmed';
+  end if;
+  if (select tax_number from public.organizations where id = v_org) is distinct from 'TIN-1' then
+    raise exception 'FAIL: tax number not trimmed';
   end if;
   if (select currency from public.organizations where id = v_org) is distinct from 'BDT' then
     raise exception 'FAIL: currency not normalized';
@@ -267,6 +328,27 @@ begin
     raise exception 'FAIL: user B updated user A profile';
   exception when insufficient_privilege then null;
   end;
+end $$;
+
+reset role;
+
+-- -----------------------------------------------------------------------------
+-- User C: a 200-emoji name (200 code points, 400 UTF-16 units) is accepted
+-- -----------------------------------------------------------------------------
+set local role authenticated;
+select set_config('request.jwt.claims',
+  '{"sub":"cccccccc-0000-4000-8000-000000000003","role":"authenticated"}', true);
+
+do $$
+declare v_org uuid;
+begin
+  v_org := public.create_organization(repeat(chr(128512), 200), 'USD', 'UTC');
+  if (select char_length(name) from public.organizations where id = v_org) <> 200 then
+    raise exception 'FAIL: 200-emoji organization name not stored intact';
+  end if;
+  if (select count(*) from public.organizations) <> 1 then
+    raise exception 'FAIL: user C sees % organizations, expected 1', (select count(*) from public.organizations);
+  end if;
 end $$;
 
 reset role;

@@ -44,3 +44,12 @@ Customer Management (Roadmap Phase 2: first tenant-owned master-data module). It
 - [ ] Migrations `20261104000000_…` and `20261104010000_…` applied to the Supabase project (manual)
 - [ ] `supabase/tests/tenant_isolation.sql` run in the Supabase SQL Editor (manual)
 - [ ] UI scenarios in `docs/testing/tenant-isolation.md` checked (manual)
+
+## Foundation cleanup: organization validation alignment + Vitest
+
+- [x] `lib/organizations/validation.ts` uses the shared helpers (`trimText`, `charLength`, `optionalText`, `normalizeEmail`, `isValidEmail`, `isValidPhone`); onboarding form keeps HTML `maxLength` on phone only
+- [x] Migration `20261104040000_align_organization_validation.sql` replaces `create_organization()` body with the shared SQL helpers (no table changes)
+- [x] Vitest added (`npm test`); tests in `lib/**/*.test.ts`
+- [x] `tenant_isolation.sql` covers Unicode whitespace and code-point limits; both SQL suites pass on local PGlite
+- [ ] Migration `20261104040000_align_organization_validation.sql` applied to the Supabase project (manual; needs `20261104030000_…` applied first)
+- [ ] `supabase/tests/tenant_isolation.sql` re-run in the Supabase SQL Editor (manual)

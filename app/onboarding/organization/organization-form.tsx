@@ -8,6 +8,11 @@ import {
 import { Alert, Field, Select, SubmitButton } from "@/app/auth/_components/ui";
 import { LIMITS } from "@/lib/organizations/validation";
 
+/**
+ * Only phone has an HTML maxLength: the browser counts UTF-16 code units,
+ * which would block valid input such as a 200-emoji name. Lengths are
+ * checked on the server in code points (docs/DECISIONS.md 014).
+ */
 export function OrganizationForm({
   currencies,
   timezones,
@@ -35,7 +40,6 @@ export function OrganizationForm({
         label="Organization name"
         name="name"
         autoComplete="organization"
-        maxLength={LIMITS.name}
         defaultValue={v?.name}
         error={fe.name}
       />
@@ -44,7 +48,6 @@ export function OrganizationForm({
         name="email"
         type="email"
         autoComplete="email"
-        maxLength={LIMITS.email}
         required={false}
         defaultValue={v?.email}
         error={fe.email}
@@ -63,7 +66,6 @@ export function OrganizationForm({
         label="Address"
         name="address"
         autoComplete="street-address"
-        maxLength={LIMITS.address}
         required={false}
         defaultValue={v?.address}
         error={fe.address}
@@ -88,7 +90,6 @@ export function OrganizationForm({
       <Field
         label="Tax / VAT number"
         name="taxNumber"
-        maxLength={LIMITS.taxNumber}
         required={false}
         defaultValue={v?.taxNumber}
         error={fe.taxNumber}

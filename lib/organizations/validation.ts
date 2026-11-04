@@ -1,10 +1,24 @@
+import {
+  EMAIL_MAX_LENGTH,
+  PHONE_MAX_LENGTH,
+  isValidEmail,
+  isValidPhone,
+  normalizeEmail,
+  optionalText,
+  tooLongMessage,
+} from "@/lib/validation/fields";
+import { charLength, trimText } from "@/lib/validation/text";
+
 /**
  * Organization input validation. Runs on the server before calling the
  * database for friendly, per-field errors.
  *
  * `create_organization()` repeats these rules on purpose: the RPC can be
  * called directly through the Supabase API, bypassing this code. Keep both
- * in sync (supabase/migrations/20261104010000_harden_create_organization_validation.sql).
+ * in sync (supabase/migrations/20261104040000_align_organization_validation.sql).
+ *
+ * Trimming, lengths, email and phone use the shared rules in
+ * lib/validation/ (docs/DECISIONS.md 014), the same as customers.
  */
 
 export const DEFAULT_CURRENCY = "BDT";
@@ -31,16 +45,11 @@ export type OrganizationFieldErrors = Partial<Record<OrganizationField, string>>
 // Keep in sync with the table check constraints and create_organization().
 export const LIMITS = {
   name: 200,
-  email: 320,
-  phone: 50,
+  email: EMAIL_MAX_LENGTH,
+  phone: PHONE_MAX_LENGTH,
   address: 500,
   taxNumber: 100,
 } as const;
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Optional leading +, then digits, spaces, ( ) - and dots.
-const PHONE_RE = /^\+?[0-9() .-]+$/;
-const PHONE_MIN_DIGITS = 6;
 
 export function currencyOptions(): string[] {
   return [...SUPPORTED_CURRENCIES];
@@ -51,51 +60,38 @@ export function timezoneOptions(): string[] {
   return zones.includes("UTC") ? zones : ["UTC", ...zones];
 }
 
-function optional(value: string): string | null {
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
-}
-
 export function validateOrganizationInput(
   raw: OrganizationRawInput,
 ):
   | { ok: true; value: OrganizationInput }
   | { ok: false; fieldErrors: OrganizationFieldErrors } {
   const value: OrganizationInput = {
-    name: raw.name.trim(),
-    email: optional(raw.email)?.toLowerCase() ?? null,
-    phone: optional(raw.phone),
-    address: optional(raw.address),
-    currency: raw.currency.trim().toUpperCase(),
-    timezone: raw.timezone.trim(),
-    taxNumber: optional(raw.taxNumber),
+    name: trimText(raw.name),
+    email: normalizeEmail(raw.email),
+    phone: optionalText(raw.phone),
+    address: optionalText(raw.address),
+    currency: trimText(raw.currency).toUpperCase(),
+    timezone: trimText(raw.timezone),
+    taxNumber: optionalText(raw.taxNumber),
   };
 
   const errors: OrganizationFieldErrors = {};
 
   if (!value.name) errors.name = "Organization name is required.";
-  else if (value.name.length > LIMITS.name)
-    errors.name = `Use at most ${LIMITS.name} characters.`;
+  else if (charLength(value.name) > LIMITS.name)
+    errors.name = tooLongMessage(LIMITS.name);
 
-  if (value.email) {
-    if (value.email.length > LIMITS.email || !EMAIL_RE.test(value.email))
-      errors.email = "Please enter a valid email address.";
-  }
+  if (value.email && !isValidEmail(value.email))
+    errors.email = "Please enter a valid email address.";
 
-  if (value.phone) {
-    if (
-      value.phone.length > LIMITS.phone ||
-      !PHONE_RE.test(value.phone) ||
-      value.phone.replace(/\D/g, "").length < PHONE_MIN_DIGITS
-    )
-      errors.phone = "Please enter a valid phone number.";
-  }
+  if (value.phone && !isValidPhone(value.phone))
+    errors.phone = "Please enter a valid phone number.";
 
-  if (value.address && value.address.length > LIMITS.address)
-    errors.address = `Use at most ${LIMITS.address} characters.`;
+  if (value.address && charLength(value.address) > LIMITS.address)
+    errors.address = tooLongMessage(LIMITS.address);
 
-  if (value.taxNumber && value.taxNumber.length > LIMITS.taxNumber)
-    errors.taxNumber = `Use at most ${LIMITS.taxNumber} characters.`;
+  if (value.taxNumber && charLength(value.taxNumber) > LIMITS.taxNumber)
+    errors.taxNumber = tooLongMessage(LIMITS.taxNumber);
 
   if (!currencyOptions().includes(value.currency))
     errors.currency = "Please choose a currency.";

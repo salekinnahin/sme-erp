@@ -15,7 +15,7 @@ Intended stack, and what the repository actually uses today:
 | File storage | Supabase Storage | Not used yet |
 | Hosting | Vercel | Not configured in the repository |
 | Linting | ESLint | ESLint 9 with `eslint-config-next` (core-web-vitals + typescript) |
-| Tests | — | No test framework is installed yet |
+| Tests | — | Vitest 4 (`npm test`) for TypeScript domain/validation logic, `lib/**/*.test.ts`, Node environment. SQL tests in `supabase/tests/`, run in the SQL Editor |
 
 Notable Next.js 16 specifics already in use (read `node_modules/next/dist/docs/` before changing these):
 
@@ -74,7 +74,8 @@ lib/
   format.ts                  Date formatting in the organization's time zone
 supabase/
   migrations/                SQL migrations
-  tests/                     SQL tests (tenant isolation), run in the SQL Editor
+  tests/                     SQL tests (tenant isolation, customers), run in the SQL Editor
+lib/**/*.test.ts             Vitest unit tests, next to the code they test
 proxy.ts                     Session refresh + optimistic route protection
 ```
 
@@ -120,4 +121,4 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 - Invitations, member management, role changes
 - ERP domain tables other than `customers`
 - Supabase Storage usage
-- Automated tests
+- Automated UI / end-to-end tests

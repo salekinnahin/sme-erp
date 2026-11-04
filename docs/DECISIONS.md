@@ -150,4 +150,17 @@ Status: accepted
 - **Length** is counted in Unicode code points: `charLength()` in TypeScript, `char_length()` in SQL. Limits are unchanged. Customer form fields have no HTML `maxLength`, because browsers count UTF-16 code units. Phone keeps it, because it only allows ASCII.
 - No Unicode normalization (NFC/NFKC). A combining sequence such as `e` + U+0301 counts as two characters in both layers.
 
-**Consequences:** The customers module uses these rules (migration `20261104030000_harden_customer_validation.sql`). Vendors and products should reuse them. Organization validation (`lib/organizations/validation.ts`, `create_organization()`) still uses the older `trim()`/`btrim()` and `.length` rules and should be aligned in a separate change. Changing the whitespace set means changing both files in a new migration, and re-validating the affected constraints.
+**Consequences:** The customers module uses these rules (migration `20261104030000_harden_customer_validation.sql`). Organizations use them too: `lib/organizations/validation.ts` uses the shared helpers, and `create_organization()` calls `trim_whitespace()` and `text_has_whitespace()` (migration `20261104040000_align_organization_validation.sql`). Vendors and products should reuse them. Shared field rules (optional text, email, phone, length message) live in `lib/validation/fields.ts`. Business limits stay in each module's `validation.ts`. The rules are covered by Vitest tests (`lib/**/*.test.ts`, `npm test`) and by the SQL suites. Changing the whitespace set means changing both files in a new migration, and re-validating the affected constraints.
+
+## 015 — Known limitation: Unicode email casing differs between TypeScript and SQL
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** The foundation cleanup aligns whitespace and code-point lengths (DECISIONS 014), but email casing still uses JavaScript `toLowerCase()` in `lib/validation/fields.ts` and PostgreSQL `lower()` in `create_organization()` and customer email constraints. These operations can differ for non-ASCII letters, depending on the database locale/provider. Local PGlite checks with `C.UTF-8` confirmed that `İpek@example.com` becomes `i` + U+0307 + `pek@example.com` in JavaScript but `ipek@example.com` in SQL. Similarly, `ΟΣ@example.com` becomes `ος@example.com` in JavaScript but `οσ@example.com` in SQL. These examples were verified locally; remote Supabase was not accessed.
+
+**Decision:** Record this pre-existing mismatch as accepted technical debt for the foundation cleanup. Keep the current validation behavior for now. This entry qualifies the email consistency described in DECISIONS 012 and 013; the whitespace and code-point rules in DECISIONS 014 remain unchanged.
+
+**Consequences:** The same Unicode email input can be stored differently through the app and a direct organization RPC call. Differences in case expansion can also affect acceptance near the email length limit, and customer email constraints can disagree with app-normalized values under some database locales. ASCII email casing is unaffected. Existing tests do not establish Unicode casing parity between TypeScript and SQL.
+
+**Follow-up:** Define one deterministic email casing policy and implement it consistently in both layers. Add paired TypeScript and SQL regression cases for dotted capital I, Greek final sigma, and the email length boundary. Any database behavior change must use a new migration and assess existing email values before altering them.

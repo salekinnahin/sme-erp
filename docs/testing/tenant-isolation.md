@@ -15,6 +15,7 @@ The script runs in a transaction that is rolled back, so it leaves no data. It s
 - the profile trigger, and that each user can read only their own profile
 - `anon` cannot read tables or call `create_organization`
 - input validation in `create_organization` itself (blank or over-long name, unsupported currency such as `ZZZ`, malformed email or phone, over-long address or tax number), and that a repeat call is rejected
+- the shared Unicode rules (DECISIONS 014): names that are only U+00A0, U+0085, U+2003 or U+FEFF are rejected; that whitespace is trimmed from the edges of every field; a 200-emoji name is accepted and a 201-emoji name rejected; an email with inner U+00A0, U+0085 or U+2003 is rejected
 - user B cannot read Organization A, its memberships, or user A's profile
 - user B cannot insert themselves into Organization A, create a membership for another user, change their own role, move their membership, or insert, update or delete organizations or profiles directly
 - user A cannot read Organization B

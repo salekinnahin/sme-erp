@@ -1,13 +1,10 @@
 /**
- * Shared field rules for master-data modules (customers, and later vendors
- * and products). The database repeats these rules in CHECK constraints, so
- * keep both in sync when changing them.
+ * Shared field rules for organizations and master-data modules (customers,
+ * and later vendors and products). The database repeats these rules in
+ * CHECK constraints and in create_organization(), so keep them in sync.
  *
  * Whitespace and length follow lib/validation/text.ts: one explicit
  * whitespace set and Unicode code-point counting, both matching the database.
- *
- * Organization validation (lib/organizations/validation.ts) predates this
- * module and still uses JavaScript's default trim() and String.length.
  */
 
 import { charLength, hasWhitespace, trimText } from "./text";
@@ -50,6 +47,11 @@ export function isValidPhone(phone: string): boolean {
     PHONE_RE.test(phone) &&
     phone.replace(/\D/g, "").length >= PHONE_MIN_DIGITS
   );
+}
+
+/** Error message for a text field over its code-point limit. */
+export function tooLongMessage(limit: number): string {
+  return `Use at most ${limit} characters.`;
 }
 
 export function isUuid(value: string): boolean {

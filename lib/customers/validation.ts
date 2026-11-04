@@ -5,6 +5,7 @@ import {
   isValidPhone,
   normalizeEmail,
   optionalText,
+  tooLongMessage as tooLong,
 } from "@/lib/validation/fields";
 import { charLength, trimText, truncateChars } from "@/lib/validation/text";
 
@@ -58,10 +59,6 @@ export const CUSTOMER_FIELDS: readonly CustomerField[] = [
   "taxNumber",
   "notes",
 ];
-
-function tooLong(limit: number) {
-  return `Use at most ${limit} characters.`;
-}
 
 export function validateCustomerInput(
   raw: CustomerRawInput,
