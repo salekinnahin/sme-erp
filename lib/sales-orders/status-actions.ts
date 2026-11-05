@@ -41,9 +41,9 @@ export type SalesOrderStatusAction = StatusActionPresentation & { status: SalesO
 export function salesOrderStatusActions(
   role: Role,
   status: SalesOrderStatus,
+  hasInvoice = false,
 ): SalesOrderStatusAction[] {
-  return availableSalesOrderStatusChanges(role, status).map((to) => ({
-    status: to,
-    ...SALES_ORDER_STATUS_ACTION_PRESENTATION[to],
-  }));
+  return availableSalesOrderStatusChanges(role, status)
+    .filter((to) => !hasInvoice || to !== "cancelled")
+    .map((to) => ({ status: to, ...SALES_ORDER_STATUS_ACTION_PRESENTATION[to] }));
 }

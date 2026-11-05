@@ -37,7 +37,7 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 
 - [x] Quotations — Part 1 (database, domain, validation, calculations, permissions, tests) and Part 2 (pages, list/search/filter, status actions, print view). Manual Supabase steps open: see `tasks/current.md`
 - [x] Sales orders — Part 1 (database, domain, validation, calculations, quotation conversion, permissions, tests) and Part 2 (pages, list/search/filter, conversion from accepted quotations, status actions, print view). Manual Supabase steps open: see `tasks/current.md`
-- [ ] Invoices
+- [x] Invoices — Part 1 (database/domain) and Part 2 (list, direct create, detail, draft edit, sales order conversion, issue/cancel, print and navigation). Manual Supabase/UI checks and environment-blocked production build remain open: see `tasks/current.md`
 - [ ] Customer payments
 
 ## Phase 5 — Purchasing

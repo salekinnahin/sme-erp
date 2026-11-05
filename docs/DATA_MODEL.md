@@ -1,6 +1,6 @@
 # Data Model
 
-> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. `product_categories` and `products` exist, created by `supabase/migrations/20261104070000_products.sql`. `quotations`, `quotation_items` and `document_number_counters` exist, created by `supabase/migrations/20261104090000_quotations.sql` (single-document read `get_quotation()` added by `20261104110000_get_quotation.sql`, list/search `list_quotations()` by `20261104120000_list_quotations.sql`). `sales_orders` and `sales_order_items` exist, created by `supabase/migrations/20261104130000_sales_orders.sql` (list/search `list_sales_orders()` added by `20261104140000_list_sales_orders.sql`). Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
+> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. `product_categories` and `products` exist, created by `supabase/migrations/20261104070000_products.sql`. `quotations`, `quotation_items` and `document_number_counters` exist, created by `supabase/migrations/20261104090000_quotations.sql` (single-document read `get_quotation()` added by `20261104110000_get_quotation.sql`, list/search `list_quotations()` by `20261104120000_list_quotations.sql`). `invoices` and `invoice_items` exist (migration `20261104150000_invoices.sql`, list RPC `20261104160000_list_invoices.sql`). `sales_orders` and `sales_order_items` exist, created by `supabase/migrations/20261104130000_sales_orders.sql` (list/search `list_sales_orders()` added by `20261104140000_list_sales_orders.sql`). Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
 
 ## Global Rules
 
@@ -284,16 +284,77 @@ Draft line IDs are not durable. An item `id` sent to `update_sales_order_draft()
 - Lists use `list_sales_orders(organization_id, search, status, customer_id, limit, offset)` (`SECURITY INVOKER`, RLS applies), same rules as `list_quotations`: search is a substring of `sales_order_number` or the `customer_name` snapshot, `grand_total` is text, order `created_at desc, id desc`, limit 1–100, `total_count` before limit/offset. Each row also carries `source_quotation_id` and `source_quotation_number`.
 - Errors: `42501` not authenticated / role not allowed; `P0002` sales order or (conversion) quotation not found, the same for unknown, other tenant and disabled member; `23503` customer or product not found or inactive; `22023` invalid input; `22003` amount too large; `23505` quotation already converted; `55000` not a draft / transition not allowed / quotation not accepted.
 - Triggers, for every writer: `sales_orders_enforce_rules` freezes `organization_id`, `sales_order_number`, `source_quotation_id`, `created_at` and `created_by` (except to NULL), checks transitions, after `draft` allows no change but `status`, and rejects every DELETE (any status, `55000` `sales orders cannot be deleted`), before the item cascade starts. Deleting an organization that has sales orders therefore fails too; a purge would need an explicit workflow. `sales_order_items_enforce_draft` allows item writes only while the order is `draft`.
-- Status transitions: `draft → confirmed | cancelled`, `confirmed → completed | cancelled`. `completed` and `cancelled` are terminal.
+- Status transitions: `draft → confirmed | cancelled`, `confirmed → completed | cancelled`. `completed` and `cancelled` are terminal. A confirmed order that has an invoice can no longer be cancelled, only completed (see Invoice access rules).
 - Indexes: `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, order_date desc)`, `(organization_id, customer_id)`, `(created_by)`, unique `(organization_id, sales_order_number)`, `(organization_id, id)`, `(organization_id, source_quotation_id)`; items unique `(organization_id, sales_order_id, sort_order)`, `(organization_id, product_id)`.
 - Sales orders do not affect inventory in V1 Part 1 (no reservation, no deduction) and are never deleted by clients.
+
+### `invoices` (implemented, Part 1: database and domain layer, no UI)
+
+Migration `20261104150000_invoices.sql`, DECISIONS 023. Same shape as `sales_orders`.
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade (blocked by the no-delete trigger). From the customer (direct) or the sales order (conversion), through the caller's active membership; never changes |
+| `invoice_number` | text, not null | `INV-000001`, … per organization (`^INV-[0-9]{6,}$`). Unique `(organization_id, invoice_number)`. Generated by the database (`next_document_number(org, 'invoice')`); never changes |
+| `customer_id` | uuid, not null | Composite FK `(organization_id, customer_id)` → `customers(organization_id, id)` |
+| `source_sales_order_id` | uuid | NULL for direct invoices. Composite FK `(organization_id, source_sales_order_id)` → `sales_orders(organization_id, id)`. Unique `(organization_id, source_sales_order_id)`: one invoice per sales order, ever, even if cancelled (NULLs are distinct, so direct invoices are unaffected). Set only by conversion; never changes |
+| `customer_name` | text, not null | Snapshot, 1–200 code points |
+| `customer_company_name`, `customer_phone`, `customer_email`, `customer_address`, `customer_tax_number` | text | Snapshot: from the customer (direct create, customer change on a draft) or copied from the sales order (conversion) |
+| `invoice_date` | date, not null | Finite |
+| `due_date` | date | Optional. Finite, `>= invoice_date` |
+| `status` | text, not null | `draft` (default), `issued`, `partially_paid`, `paid`, `cancelled` |
+| `notes` | text | Optional. Trimmed, 1–2000 code points. Conversion copies the sales order's notes |
+| `subtotal`, `discount_total`, `tax_total`, `grand_total` | numeric(18,2), not null | Computed by the database from the items; same CHECK as quotations |
+| `amount_paid` | numeric(18,2), not null | Reserved for the Payment module. `0 ≤ amount_paid ≤ grand_total`. **Part 1: always 0** (`invoices_no_payments_yet_check`) |
+| `amount_due` | numeric(18,2), not null | Always `grand_total − amount_paid` (`invoices_balance_check`). Recomputed with the totals on every draft save |
+| `created_by` | uuid | → `auth.users(id)` on delete set null. `auth.uid()` |
+| `created_at`, `updated_at` | timestamptz, not null | |
+
+Balance constraints:
+
+- `invoices_balance_check` (durable): `amount_paid ≥ 0`, `amount_paid ≤ grand_total` (no overpayment), `amount_due = grand_total − amount_paid`.
+- `invoices_status_balance_check` (durable): `paid` ⇒ `amount_due = 0` and `amount_paid = grand_total` (settled; a zero-total invoice with 0 / 0 qualifies, `amount_paid > 0` is not required); `partially_paid` ⇒ `amount_paid > 0` and `amount_due > 0`; every other status ⇒ `amount_paid = 0`.
+- `invoices_no_payments_yet_check` (**Part 1 only**): `amount_paid = 0` and status not `partially_paid` / `paid`. No writer can store a payment state yet, not even a zero-total `paid`. The Payment module's migration drops this one constraint.
+
+### `invoice_items` (implemented)
+
+Same columns, types and CHECK constraints as `quotation_items` / `sales_order_items` (including `invoice_items_amounts_check`, the calculation model above), with `invoice_id`: composite FK `(organization_id, invoice_id)` → `invoices(organization_id, id)` on delete cascade, composite FK `(organization_id, product_id)` → `products(organization_id, id)`, unique `(organization_id, invoice_id, sort_order)`. An invoice has 1–100 items.
+
+Snapshot sources for `product_name`, `sku`, `unit` (and the default `unit_price` / `description`):
+
+- direct create, or a new line on a draft: the active product's current data
+- conversion: the sales order line, copied with its quantity, price, discount, tax rate and amounts
+- a kept line on a draft (item `id` = an existing line of the same invoice, same product): that line
+
+Draft line IDs are not durable (same rule as sales orders, DECISIONS 022/023): an item `id` sent to `update_invoice_draft()` only identifies the previously recorded line for that save. `invoice_replace_items()` deletes and re-inserts a draft's items, so row IDs change after each draft save. Nothing may reference a draft invoice line by ID. After issue, items are immutable and their IDs are stable.
+
+### Invoice access rules
+
+- `authenticated` has `SELECT` only on `invoices` and `invoice_items` (RLS `is_org_member`). No INSERT, UPDATE or DELETE privilege or policy. `anon` has nothing.
+- Writes go only through `SECURITY DEFINER` functions with `search_path = ''`. Clients never send the organization, number, status, source sales order, snapshots, amounts, totals, `amount_paid` or `amount_due`:
+  - `create_invoice(customer_id, invoice_date, due_date, notes, items jsonb) → uuid`. Any active member. Active customer and active products of the same organization. Items as for `create_sales_order` (`id` rejected). `amount_paid = 0`, `amount_due = grand_total`.
+  - `create_invoice_from_sales_order(sales_order_id, invoice_date, due_date default null) → uuid`. Any active member. Locks the authorized sales order `FOR SHARE` (a concurrent status change waits), which must be `confirmed` and not yet invoiced. Copies customer reference and snapshot, notes, and every line as stored; customers and products are not re-read. Recomputed totals must equal the sales order's. The sales order is not modified. The result is a `draft` with `amount_paid = 0`, `amount_due = grand_total`.
+  - `update_invoice_draft(invoice_id, customer_id, invoice_date, due_date, notes, items jsonb)`. Any active member, `draft` only, direct or converted. Same customer and line-ID rules as `update_sales_order_draft`.
+  - `set_invoice_status(invoice_id, status)`. `issued` for any active member; `cancelled` for owners and managers; `partially_paid` and `paid` are refused for everyone (`42501`, before any lookup). Same lookup-then-lock pattern as `set_sales_order_status`.
+- `get_invoice(organization_id, invoice_id) → jsonb` (`SECURITY INVOKER`): header (including `source_sales_order_number`, `amount_paid`, `amount_due`) and items in one statement, money as strings, NULL when not visible.
+- No list RPC yet (Part 2, with the UI).
+- Errors: `42501` not authenticated / role not allowed / payment status requested; `P0002` invoice or (conversion) sales order not found, the same for unknown, other tenant and disabled member; `23503` customer or product not found or inactive; `22023` invalid input; `22003` amount too large; `23505` sales order already invoiced; `55000` not a draft / transition not allowed / sales order not confirmed.
+- Triggers, for every writer: `invoices_enforce_rules` freezes `organization_id`, `invoice_number`, `source_sales_order_id`, `created_at` and `created_by` (except to NULL), checks transitions against the lifecycle table, after `draft` allows no change but `status`, `amount_paid` and `amount_due`, and rejects every DELETE (any status, `55000` `invoices cannot be deleted`) before the item cascade. Deleting an organization that has invoices therefore fails; a purge would need an explicit workflow. `invoice_items_enforce_draft` allows item writes only while the invoice is `draft`.
+- Status lifecycle (`invoice_status_transition_allowed`):
+  - user: `draft → issued | cancelled`, `issued → cancelled`
+  - system, reserved for the Payment module: `issued → partially_paid | paid`, `partially_paid → paid`
+  - `paid` and `cancelled` are terminal. `partially_paid` and `paid` have no path to `cancelled` (no refunds or credits in V1).
+- Indexes: `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, invoice_date desc)`, `(organization_id, due_date)`, `(organization_id, customer_id)`, `(created_by)`, unique `(organization_id, invoice_number)`, `(organization_id, id)`, `(organization_id, source_sales_order_id)`; items unique `(organization_id, invoice_id, sort_order)`, `(organization_id, product_id)`.
+- **Invoiced sales orders cannot be cancelled.** Trigger `sales_orders_block_invoiced_cancel` on `sales_orders` (from the invoice migration) rejects a move to `cancelled` while any invoice, also a cancelled one, has that order as its source (`55000`). The order may still be completed. Under concurrency the conversion's `FOR SHARE` lock decides: whichever commits first wins and the other fails with `55000`.
+- Invoice lines carry no link to sales order lines; line-level source links stay out of scope until partial invoicing exists.
+- Invoices do not affect inventory and are never deleted.
 
 ### Other sales tables (planned)
 
 | Table | Notes |
 | --- | --- |
-| `invoices`, `invoice_lines` | Lines snapshot product name, price and tax at the time of issue |
-| `customer_payments` | One row per payment transaction. Total valid payments may not exceed the invoice total |
+| `customer_payments` | One row per payment transaction. Total valid payments may not exceed the invoice total. The Payment module maintains `invoices.amount_paid` (= sum of valid payments) and moves the status to `partially_paid` / `paid` from its own `SECURITY DEFINER` function |
 
 ## Purchasing
 
@@ -325,3 +386,8 @@ Draft line IDs are not durable. An item `id` sent to `update_sales_order_draft()
 - Stock on hand = sum of `stock_movements.quantity` per product.
 
 Cancelling a document uses a status change and, where relevant, reversing movements or payments. Financial rows are never deleted.
+
+
+### Invoice list read (Part 2)
+
+`list_invoices(organization_id, search, status, customer_id, limit, offset)` follows the sales order list: STABLE, SECURITY INVOKER, empty search path, authenticated only. RLS and an explicit organization predicate both apply. Searches use invoice number/customer snapshot name, with Unicode trimming and literal LIKE wildcards. Status/customer filters combine; limit is clamped to 1–100, offset to at least zero. Rows sort by `created_at desc, id desc`, include `total_count` before pagination, source sales order ID/number, and exact text for `grand_total`, `amount_paid`, `amount_due`. No Part 1 tables, constraints or write rules change (DECISIONS 024).

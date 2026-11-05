@@ -9,6 +9,7 @@ const NAV_LINKS = [
   { href: "/products", label: "Products" },
   { href: "/quotations", label: "Quotations" },
   { href: "/sales-orders", label: "Sales Orders" },
+  { href: "/invoices", label: "Invoices" },
 ] as const;
 
 /** Minimal header with navigation for signed-in pages. */

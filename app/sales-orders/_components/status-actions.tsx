@@ -41,7 +41,8 @@ export function SalesOrderStatusActions({
   const [state, formAction] = useActionState<StatusState, FormData>(setSalesOrderStatusAction, {});
   const [confirming, setConfirming] = useState<SalesOrderStatusAction | null>(null);
   const [seenStatus, setSeenStatus] = useState(status);
-  if (seenStatus !== status) {
+  // An invoice may remove Cancel without changing the order status.
+  if (seenStatus !== status || (confirming !== null && !actions.some((a) => a.status === confirming.status))) {
     setSeenStatus(status);
     setConfirming(null);
   }

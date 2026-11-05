@@ -370,3 +370,81 @@ Use Users A and B and the Organization A employee from section 3.2. Organization
 | 17 | Print from the detail page | Organization details, number, status, dates, customer snapshot, source quotation number, items, totals, notes; no app chrome; white paper in dark mode |
 | 18 | As B, open `/sales-orders/<A id>`, `/edit`, `/print`, `/sales-orders/not-a-uuid`; `/sales-orders?customer=<A customer id>` | "Sales order not found" for all; the list shows nothing of A |
 
+## 8. Invoices
+
+Run after any change to `invoices`, `invoice_items`, their functions, triggers or policies, `document_number_counters`, the sales order tables, or `lib/invoices/`.
+
+### 8.1 Database test (automated SQL)
+
+File: `supabase/tests/invoices.sql`. Run it as a separate run in the SQL Editor, after all migrations up to `20261104150000_invoices.sql`. Expected last result: `ALL INVOICE CHECKS PASSED`. It is rolled back. Its last section drops `invoices_no_payments_yet_check` **inside the transaction** to simulate the Payment module; the rollback restores it.
+
+It checks:
+
+- `anon` cannot read invoices or items, or call any of the five functions
+- definitions: the trigger `sales_orders_block_invoiced_cancel` exists and is enabled; the four write functions are `SECURITY DEFINER` with `search_path = ''`, `authenticated` only. The internal helpers (`sales_orders_block_invoiced_cancel`, `invoice_replace_items`, `invoice_recompute_totals`, `invoice_normalize_header`, `invoice_status_transition_allowed`, the trigger functions, `next_document_number`) have a fixed `search_path` and cannot be executed by API roles. `get_invoice` is `SECURITY INVOKER`, `STABLE` SQL. `set_invoice_status` locks only through the role-checked predicate; `create_invoice_from_sales_order` locks the authorized sales order `FOR SHARE`. No INSERT/UPDATE/DELETE (table or column) for API roles. The counter type check allows `invoice`. The transition table is exactly the user + reserved payment transitions
+- direct creation: `INV-000001`, … per organization; organization, creator, `draft`, `source_sales_order_id` NULL, snapshots, `amount_paid = 0.00` and `amount_due = grand_total` derived by the database; forged snapshot, amount, `amount_paid`, `amount_due`, `status`, number and organization keys ignored; 100 items, 2000-code-point notes and descriptions, due date equal to the invoice date accepted
+- calculations: the quotation examples (349.99 / 10.00 / 43.50 / 383.49 and the rounding set → 75.98 / 5.97 / 7.39 / 77.40)
+- rejected input: the sales order list (items, quantity incl. NaN / exponent, price, tax, discount, description, overflow, inactive / other-tenant / later-deactivated product, line `id` on create), missing or infinite dates, a due date before the invoice date, over-long notes, an inactive, deactivated or NULL customer. Failures consume no numbers. Unknown and other-tenant customers and products fail identically
+- conversion of a confirmed sales order whose customer and one product were deactivated, and whose other product was renamed and repriced, after confirmation:
+  - it succeeds as a `draft` with `source_sales_order_id` set and `amount_due = grand_total`
+  - the customer snapshot, notes and every line (column for column) come from the sales order, not the master data; totals equal the order's
+  - the sales order (header and items) is byte-for-byte unchanged, including its status
+- conversion is refused a second time (`23505`), for draft, completed and cancelled sales orders (`55000`), for invalid dates (`22023`), and for unknown, NULL and other-tenant sales orders (`P0002`, identical). A cancelled invoice still consumes its sales order
+- `get_invoice`: one document with exact strings (including `amount_paid`, `amount_due`), `source_sales_order_number`, ordered items; NULL for a wrong organization, unknown ID or NULLs
+- direct writes as an owner (`42501`): insert (also with a forged `source_sales_order_id`), update of number, organization, creator, `created_at`, source sales order, totals, `amount_paid`, `amount_due`, snapshot, status (`paid`, `issued`), notes, delete, item insert/update/delete; internal helpers not callable
+- snapshots survive customer and product changes
+- draft edits (direct and converted): unchanged customer keeps its snapshot (also when inactive); changed customer re-snapshotted; kept lines keep snapshot and price (also an inactive product); new or changed products need an active product; another invoice's, the source sales order's, unknown, repeated and non-string line `id`s rejected; each rejection leaves the invoice unchanged; `amount_due` follows the new total; the source sales order never changes
+- statuses: employee issues but cannot cancel (draft or issued); manager paths draft → issued, draft → cancelled, issued → cancelled; invalid transitions `55000`; `paid` / `partially_paid` refused for every role and status (`42501`); unknown statuses `22023`; issuing does not touch the sales order
+- immutability: an issued or cancelled invoice cannot be edited through the API; as `postgres`, every commercial header column, item insert/update/delete and identity column is blocked by the triggers; payment states (`paid`, `partially_paid`, any `amount_paid > 0`) are rejected by the balance constraints
+- integrity (as `postgres`): line, tax, total and balance CHECKs, due date, composite FKs (product, customer, item organization, source sales order of another tenant), unique source sales order, unique and well-formed number, no `paid` insert
+- no hard delete: draft, issued, cancelled (from draft and from issued), converted draft and converted issued invoices cannot be deleted, nor in bulk, nor through the organization cascade; items and the source link survive; the sales orders still cannot be invoiced again
+- tenant isolation (User B): reads nothing of A (tables and `get_invoice`); converts B's own order to B's `INV-000001`; converting A's sales order, updating A's invoice and changing its status fail exactly like unknown IDs (`P0002`); cannot use A's customer, product or a foreign line `id`
+- a disabled member, and a manager disabled later, cannot read, create, convert, update or change status
+- invoiced sales orders: a confirmed order with an issued, a draft or a cancelled invoice cannot be cancelled by the owner (`55000`, order unchanged), by the employee (`42501`, role first) or by `postgres`; it can be completed (invoice unchanged) and then stays terminal; a confirmed order without an invoice can still be cancelled and then cannot be invoiced; User B's cancel of A's invoiced order is identical to an unknown ID (`P0002`)
+- zero-total invoices: a draft and an issued invoice with `0.00 / 0.00 / 0.00`; the manager cannot set `paid` / `partially_paid` (`42501`); as `postgres`, `paid` is rejected in Part 1 (also on insert)
+- simulated Payment module (constraint dropped in-transaction): status must agree with the balance, no overpayment, a positive `paid` needs `amount_paid = grand_total` (not `grand_total − 1`, not 0), `partially_paid` needs something paid and something due, a zero-total issued invoice becomes `paid` with 0 / 0 but never `partially_paid`, `issued → partially_paid → paid` works, an invoice with payments cannot be cancelled, content stays frozen, `paid` is terminal and cannot be deleted; the owner cannot cancel a paid invoice through the RPC
+
+Not covered by the script (needs two sessions): concurrent conversions of the same sales order, and a sales order status change racing a conversion. To check by hand, open two `psql` sessions as members, `begin;`, and call `create_invoice_from_sales_order(<id>, current_date)` in both: the second waits and then fails with `23505`. With `set_sales_order_status(<id>, 'cancelled')` (as owner or manager) in the second session instead, it waits for the conversion to commit and then fails with `sales order has an invoice and cannot be cancelled`. In the reverse order (cancel first, uncommitted), the conversion waits and then fails with `only a confirmed sales order can be invoiced (status is cancelled)`.
+
+### 8.2 API probe (manual)
+
+As User B (section 2 probe variables), with Organization A's invoice and confirmed sales order IDs. Every result must be empty or an error:
+
+```js
+const invA = "<Invoice A id>", soA = "<Confirmed sales order A id>";
+console.log(await (await fetch(`${url}/rest/v1/invoices?id=eq.${invA}`, { headers: h })).json());                 // []
+console.log(await (await fetch(`${url}/rest/v1/invoice_items?invoice_id=eq.${invA}`, { headers: h })).json());   // []
+console.log(await (await fetch(`${url}/rest/v1/invoices?id=eq.${invA}`, { method: "PATCH", headers: h,
+  body: JSON.stringify({ amount_paid: 1, status: "paid" }) })).status);                                            // 401/403
+console.log(await (await fetch(`${url}/rest/v1/rpc/create_invoice_from_sales_order`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_sales_order_id: soA, p_invoice_date: "2026-11-06" }) })).json());                      // "sales order not found"
+console.log(await (await fetch(`${url}/rest/v1/rpc/set_invoice_status`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_invoice_id: invA, p_status: "cancelled" }) })).json());                                // "invoice not found"
+```
+
+As User A (owner of Organization A), the payment statuses are refused even for one's own invoice:
+
+```js
+console.log(await (await fetch(`${url}/rest/v1/rpc/set_invoice_status`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_invoice_id: invA, p_status: "paid" }) })).json());                                     // "invoice status paid is set by payments only"
+```
+
+### 8.3 UI test (manual)
+
+None yet: Invoice Part 1 has no UI.
+
+
+### 8.3 Invoice Part 2 UI/workflow checks
+
+Apply `20261104160000_list_invoices.sql` after Part 1. Run the updated `invoices.sql`, then re-run `sales_orders.sql` and `quotations.sql`. Local SQL checks do not replace signed-in browser checks.
+
+1. As each active role, visit `/invoices` and create a direct draft with an active customer, inventory product and service. Invoice date uses the organization timezone; due date is optional. Verify due-before-invoice rejection, 1–100 line limits, invalid quantity/price/discount/tax errors, exact rounding, add/remove, and read-only unit/paid/due.
+2. Create more than 500 customers/products; search a late record by name/company/phone/email or SKU. Searches offer active records only, 25 per request. Type a second query while the first request is delayed: old options cannot be selected with Enter or mouse. Enter in the selector must never submit the invoice.
+3. Edit a draft after changing/deactivating its customer/products. Current references remain visible with recorded snapshots and inactive labels. Change quantities without reselecting and save. Change product A → B → A and customer A → B → A; recorded details return. Keep existing IDs (including changed-product lines), add new lines without IDs, omit removed lines; after save, reopen edit to load new IDs.
+4. On a confirmed sales order, Create invoice opens a date form; conversion copies stored snapshots, notes, prices and totals even if master data is now inactive. Source order is unchanged. View invoice replaces Create. Complete the source order and confirm its invoice link remains. Cancel the invoice and confirm reconversion remains unavailable; the order still hides Cancel and permits authorized Complete.
+5. Employees can issue drafts but never see Cancel or payment-status actions. Owners/managers can cancel drafts or issued invoices with confirmation. Non-drafts redirect from edit to detail. Have a second user issue/cancel/convert first: stale actions show safe errors and refreshed status/link, with no duplicate conversion.
+6. List search by invoice number/customer snapshot, status/customer filters, pages, empty results and past-end pages work. Detail, list and print preserve exact money strings, source links and paid/due balances. Master-data renames do not change historical displays.
+7. Print drafts and issued/cancelled invoices in light/dark mode and use browser Save as PDF. Letterhead, dates, snapshots, all line values, notes, totals and balances are visible; navigation/controls are absent from paper. Check a long description and multi-page invoice.
+8. Signed out, visit all five invoice routes. As another tenant, use a known invoice ID in detail/edit/print and submit forged IDs through actions: no data leaks. Disabled members lose invoice access and selector searches immediately. Simulate failed reads to verify retryable errors.
+
+The list customer dropdown follows the existing quotation/sales-order cap (500 plus current); create/edit selectors are uncapped searches. Hosted/browser checks remain manual until executed.

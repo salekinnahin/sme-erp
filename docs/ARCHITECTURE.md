@@ -65,6 +65,8 @@ app/
     actions.ts               Server Actions: create, update draft, set status
     _components/             Line-item form with preview, status buttons, status badge,
                              print button
+  invoices/                  Invoice list, new, detail, draft edit and browser print;
+                             issue/cancel controls, sales order conversion
   dashboard/page.tsx         Authenticated landing page (requires an organization)
   dashboard/error.tsx        Error boundary: retryable "couldn't load organization" message
   onboarding/error.tsx       Same error boundary for onboarding
@@ -91,7 +93,13 @@ lib/
   sales-orders/              validation.ts (input, dates, line IDs, statuses, conversion,
                              RPC payloads; line rules reused from quotations),
                              calculations.ts (re-exports the quotation math), permissions.ts,
-                             errors.ts, sales-orders.ts (domain functions). No UI yet
+                             errors.ts, sales-orders.ts (domain functions)
+  invoices/                  validation.ts (input, dates, line IDs, user vs payment statuses,
+                             initial balance, sales order conversion, RPC payloads; line
+                             rules reused from quotations), calculations.ts (re-exports the
+                             quotation math), permissions.ts, errors.ts, invoices.ts
+                             (domain functions), plus form, list parameters, selector guards, safe messages,
+                             status and conversion presentation (Invoice Part 2)
   validation/fields.ts       Shared field rules (email, phone, UUID, optional text)
   validation/decimal.ts      Decimal-string parsing and BigInt scaled arithmetic (no floats)
   validation/text.ts         Whitespace set and code-point length, matching SQL
@@ -100,7 +108,7 @@ lib/
                              quantity formatting on decimal strings (no floats)
 supabase/
   migrations/                SQL migrations
-  tests/                     SQL tests (tenant isolation, customers, vendors, products, quotations, sales orders), run in the SQL Editor
+  tests/                     SQL tests (tenant isolation, customers, vendors, products, quotations, sales orders, invoices), run in the SQL Editor
 lib/**/*.test.ts             Vitest unit tests, next to the code they test
 proxy.ts                     Session refresh + optimistic route protection
 ```
@@ -152,10 +160,19 @@ Sales orders (`lib/sales-orders/`, migration `20261104130000_sales_orders.sql`, 
 - The edit form keeps each existing line's ID (`lib/sales-orders/form.ts`): unchanged lines and lines with a changed product send their ID, new lines none, removed lines are omitted. The ID is an edit/reference token for that save only; draft items are re-inserted on save, so row IDs are not durable until confirmation (DECISIONS 022). Kept lines display the snapshot recorded on the order; re-selecting a line's original product restores its recorded description and price.
 - The accepted quotation's detail page shows **Create sales order** / **View sales order** from one tenant-filtered lookup (`getSalesOrderForQuotation()`); the conversion itself is only the database function.
 
+Invoices (`lib/invoices/`, migration `20261104150000_invoices.sql`, DECISIONS 023) follow the sales order pattern exactly for the database, domain and validation layers, with UI in `app/invoices/` and `list_invoices()` in migration `20261104160000_list_invoices.sql` (DECISIONS 024). Differences:
+
+- The second create path is `create_invoice_from_sales_order()`: a **confirmed** sales order, locked `FOR SHARE` (confirmed is not terminal, unlike an accepted quotation), copied with its snapshots and amounts. One invoice per sales order ever: `unique (organization_id, source_sales_order_id)`.
+- The header carries a balance, `amount_paid` / `amount_due`, reserved for the Payment module. Clients never send it; the database sets `0` / `grand_total` and keeps `amount_due = grand_total − amount_paid` by CHECK. Part 1 pins `amount_paid = 0` with a constraint the Payment migration will drop.
+- Statuses split into user transitions (`set_invoice_status()`: issue, cancel) and reserved system transitions (`partially_paid`, `paid`), which the user RPC refuses. The trigger knows the whole lifecycle; the balance constraints make payment statuses unreachable until payments exist.
+- The invoice migration adds one trigger to `sales_orders`, `sales_orders_block_invoiced_cancel`: an invoiced sales order cannot be cancelled (it may be completed). The sales order functions are unchanged.
+- `paid` means settled (`amount_due = 0`, `amount_paid = grand_total`), so a zero-total invoice can be `paid` once payments exist.
+- `getInvoiceForSalesOrder()` is the tenant-filtered lookup for the **Create invoice / View invoice** control on the sales order page.
+
 ## Request and Auth Flow
 
 1. `proxy.ts` runs on every non-static request. It calls `updateSession()`, which refreshes the Supabase session cookies and returns the user.
-2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding`, `/customers`, `/vendors`, `/products`, `/quotations` and `/sales-orders`, and authenticated users are sent away from the login and sign-up pages.
+2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding`, `/customers`, `/vendors`, `/products`, `/quotations`, `/sales-orders` and `/invoices`, and authenticated users are sent away from the login and sign-up pages.
 3. Every protected page, Server Action and Route Handler must re-check the user server-side. Use `requireUser()` or `requireTenant()` from `lib/tenancy/context.ts` (built on `supabase.auth.getUser()`). Never rely on `getSession()` or on client state for authorization.
 4. Organization routing happens in pages, not the proxy. `requireTenant()` sends users with no active membership to `/onboarding/organization`, and the onboarding page sends members to `/dashboard`. If the membership lookup fails, it throws. The segment's `error.tsx` then shows a generic message with a Retry button. It never redirects and never shows tenant data.
 5. Supabase clients are created per request. Never share one across requests.
@@ -172,6 +189,6 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 ## Not Yet Implemented
 
 - Invitations, member management, role changes
-- ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders` and `sales_order_items` (no stock, invoices or payments yet; no sales order UI yet)
+- ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders`, `sales_order_items`, `invoices` and `invoice_items` (no stock or payments yet)
 - Supabase Storage usage
 - Automated UI / end-to-end tests

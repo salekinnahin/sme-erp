@@ -10,6 +10,11 @@ import { formatCalendarDate, formatDateTime, formatMoney, formatQuantity, plainD
 import { SECONDARY_LINK, TEXT_LINK } from "@/app/_components/styles";
 import { SalesOrderStatusBadge } from "../_components/sales-order-status-badge";
 import { SalesOrderStatusActions } from "../_components/status-actions";
+import { getInvoiceForSalesOrder } from "@/lib/invoices/invoices";
+import { salesOrderConversionView } from "@/lib/invoices/conversion";
+import { todayInTimeZone } from "@/lib/quotations/form";
+import { ConvertSalesOrder } from "@/app/invoices/_components/convert-sales-order";
+import { convertSalesOrderAction } from "@/app/invoices/actions";
 
 export const metadata: Metadata = { title: "Sales order · SME ERP" };
 
@@ -31,7 +36,9 @@ async function SalesOrderDetail({ params }: Pick<PageProps<"/sales-orders/[id]">
   const tz = tenant.organization.timezone;
   const money = (amount: string) => formatMoney(amount, tenant.organization.currency);
   const canEdit = canEditSalesOrder(tenant.role, order.status);
-  const actions = salesOrderStatusActions(tenant.role, order.status);
+  const invoice = await getInvoiceForSalesOrder(tenant, order.id);
+  const conversion = salesOrderConversionView(tenant.role, order.status, invoice);
+  const actions = salesOrderStatusActions(tenant.role, order.status, invoice !== null);
 
   return (
     <div className="space-y-6">
@@ -65,6 +72,17 @@ async function SalesOrderDetail({ params }: Pick<PageProps<"/sales-orders/[id]">
         status={order.status}
         actions={actions}
       />
+
+      <ConvertSalesOrder
+        action={convertSalesOrderAction.bind(null, order.id)}
+        view={conversion}
+        today={todayInTimeZone(tenant.organization.timezone)}
+      />
+      {invoice && order.status === "confirmed" && (
+        <p className="text-sm text-zinc-500">
+          This sales order has an invoice and cannot be cancelled. Owners and managers can still mark it completed.
+        </p>
+      )}
 
       {order.status !== "draft" && (
         <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
