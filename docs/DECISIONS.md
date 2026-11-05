@@ -182,3 +182,143 @@ Status: accepted
 - **Product type changes are allowed** while there is no stock data. When stock movements are added (Phase 3), changing the type of a product that has movements must be restricted or handled explicitly.
 
 **Consequences:** Adding a unit or product type needs a new migration and a change to `lib/products/validation.ts`. Case-insensitive uniqueness uses PostgreSQL `lower()` under the database collation: ASCII SKUs behave the same everywhere, but non-ASCII case folding depends on the collation (see DECISIONS 015), and changing the collation would require rebuilding these indexes. Future modules that link two tenant-owned tables should use the same composite foreign key pattern. Future transaction lines must snapshot product name, SKU and price (DECISIONS 008).
+
+## 017 — Document numbering: per-organization counter rows
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Quotations are the first numbered document (`QT-000001`). Sales orders, invoices, purchase orders and bills will follow. Numbers must be unique per organization, generated on the server, and safe under concurrent creates. The browser must not choose them.
+
+**Options considered:**
+
+- `MAX(number) + 1`: two concurrent transactions read the same maximum. Unsafe without a table lock.
+- One PostgreSQL sequence per organization: sequences are not transactional. Every failed or rolled-back create burns a number, and sequences have to be created dynamically for each tenant.
+- An advisory lock plus `MAX + 1`: works, but the lock is easy to forget on a new write path, and it depends on scanning existing numbers.
+- **A counter row per (organization, document type)**: chosen.
+
+**Decision:**
+
+- `public.document_number_counters (organization_id, document_type, last_value)` with primary key `(organization_id, document_type)`. `public.next_document_number(org, type)` runs `INSERT … ON CONFLICT DO UPDATE SET last_value = last_value + 1 RETURNING last_value`.
+  - The upsert row-locks the counter until the creating transaction ends, so concurrent creates in one organization are serialized and get distinct numbers. Other organizations are not blocked.
+  - A rolled-back create also rolls back its increment, so failed creates leave no gaps. Numbers are never reused once committed, because documents are never deleted.
+- The function and table have no client privileges. Only `SECURITY DEFINER` document functions call them, after authorizing the caller.
+- Format: prefix + at least 6 digits (`'QT-' || lpad(n, greatest(6, length(n)), '0')`). After `QT-999999` comes `QT-1000000`, never a truncated number. `unique (organization_id, quotation_number)` is the final guard.
+
+**Consequences:** Creates within one organization are serialized for the length of the creating transaction. That is fine at SME scale, and the transactions are short. A new document type adds its value to `document_number_counters_type_check` in a migration. Numbers are opaque text, so sort lists by `created_at`, not by number string, because 7-digit numbers sort lexically before some 6-digit ones.
+
+## 018 — Quotations: database-only writes, snapshots, exact calculations, immutable after draft
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Quotations are the first transaction document. Unlike master data (DECISIONS 013), a quotation has a header and items that must change together. Its totals must never be forged. It must snapshot customer and product data (DECISIONS 008), and it must become immutable once sent. Authenticated users can call the Supabase API directly.
+
+**Decision:**
+
+- **No client writes.** `authenticated` has `SELECT` only on `quotations` and `quotation_items` (RLS on `is_org_member`). All writes go through three `SECURITY DEFINER` functions (`search_path = ''`): `create_quotation()`, `update_quotation_draft()` and `set_quotation_status()`. They derive `organization_id` (from the customer, only through the caller's active membership), `created_by`, the number, every snapshot field, every line amount and every total. The browser sends only the customer ID, dates, notes, and per item the product ID, quantity, optional unit price, discount, tax rate and optional description. Snapshot or amount keys in the payload are ignored.
+- **Atomic.** Create inserts the header and items and computes the totals in one transaction. A draft update locks the authorized header row, rewrites it, deletes and re-inserts all items, and recomputes totals in one transaction. Any error rolls back everything, including the number.
+- **Snapshots** are taken by the database at create and at every draft update. A draft therefore shows current master data when it is saved again. Sent and later quotations keep their snapshot forever. A new or updated quotation needs an active customer and active products of the same organization. An unknown ID and another tenant's ID fail identically (`23503`).
+- **Calculation model**, with exact `numeric` in SQL and BigInt on decimal strings in TypeScript (`lib/quotations/calculations.ts`):
+  - `gross = round(qty × price, 2)`, `tax = round((gross − discount) × rate × 0.01, 2)`, `line_total = gross − discount + tax`
+  - `subtotal = Σ gross`, `grand_total = subtotal − discount_total + tax_total`
+  - Rounding is half up (PostgreSQL `round(numeric)` on non-negative values), per line, before summing.
+  - SQL multiplies by `0.01` rather than dividing by 100, because numeric division can round to a limited scale first, which causes double rounding.
+  - Inputs with more decimals than the column allows are rejected, not rounded (quantity 3, money and rate 2).
+  - Tax is a per-line rate entered on the quotation: products have no tax field and there is no tax engine (PRODUCT non-scope). Discount is a per-line amount, `0 ≤ discount ≤ gross`.
+  - A CHECK constraint makes each stored item satisfy the formula, so no writer can store an inconsistent line.
+  - The TypeScript copy exists for previews and friendly errors; the database result is authoritative.
+- **Status model:** `draft → sent | cancelled`; `sent → accepted | rejected | expired | cancelled`. The other four statuses are terminal, and repeating a status is rejected. `sent` is allowed for every role; the other transitions are for owners and managers only. `set_quotation_status()` looks up the quotation through the caller's active membership without a lock, checks the role, and then locks the row with the role predicate in the same query, so it never locks or waits on rows the caller may not change. It then checks the transition against the locked status. Unknown, other-tenant and disabled-member cases all raise `P0002`.
+- **Immutability is enforced by triggers**, not only by the functions:
+  - `quotations_enforce_rules` freezes identity columns and allows only listed transitions. Once a quotation is not a draft, it rejects any change other than `status`, comparing whole rows as JSON so future columns are covered too.
+  - `quotation_items_enforce_draft` blocks item insert, update and delete unless the parent is a draft.
+  - Both apply to every writer, including `postgres` and future functions.
+- **Errors:** `55000` (object_not_in_prerequisite_state) means "not a draft" or "transition not allowed". `lib/quotations/errors.ts` maps it per operation.
+
+**Consequences:**
+
+- A draft that references a customer or product that has since been deactivated must be changed, or the master data reactivated, before it can be saved again.
+- There is no automatic expiry: `expired` is a manual owner/manager action in V1. Automatic expiry would need a scheduled job and a new decision.
+- Calculation rules exist twice (SQL and `lib/quotations/calculations.ts`). They are pinned to the same examples in `supabase/tests/quotations.sql` and `lib/quotations/calculations.test.ts`. A change to either needs a migration and both test suites.
+- Sales orders and invoices should reuse this shape: database-only writes, counter numbering, composite FKs, snapshot columns and triggers for immutability.
+
+## 019 — Whitespace helpers written with escapes; U+2028 / U+2029 restored
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** `20261104030000_harden_customer_validation.sql` wrote the shared whitespace set (DECISIONS 014) with literal characters. A local, uncommitted edit of that file and of `supabase/tests/vendors.sql` lost U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR, because editors treat them as line breaks. The committed `customers.sql` test line had never included them. A database built from such a copy treats them as ordinary characters, so a U+2028-only value passes the "required" checks, which disagrees with `lib/validation/text.ts`. That migration may already be applied remotely, so editing it cannot be the fix.
+
+**Decision:**
+
+- The local `030000` file and `vendors.sql` are restored to their committed content. History is not rewritten.
+- New migration `20261104100000_restore_whitespace_line_separators.sql` redefines `trim_whitespace()`, `text_is_trimmed()` and `text_has_whitespace()` with the full set. Signatures, attributes and grants stay the same, so every CHECK constraint and function that uses them picks up the fix. It is idempotent on databases that already have the full set. It reports existing rows that the corrected rules would reject with a `WARNING` per column and modifies nothing.
+- From now on, the whitespace set and every test value containing invisible or line-breaking characters are written as ASCII escapes (`\uXXXX` in SQL regular expressions and `E''` strings, `"\uXXXX"` in TypeScript), never as literal characters.
+- Regression checks for U+2028 / U+2029 (leading, trailing, only, inner) and U+200B (not whitespace) are in the customers, vendors, products and quotations SQL suites and in `lib/validation/text.test.ts`.
+
+**Consequences:** PostgreSQL does not re-check existing rows when a function used by a CHECK constraint changes. Rows flagged by the migration's warnings keep their values until someone trims them. The set itself is unchanged from DECISIONS 014.
+
+## 020 — A quotation document is read in one statement
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** `getQuotation()` read the header and the items with two requests. A draft saved by someone else between them could return an impossible document, such as old totals with new items.
+
+**Decision:** `public.get_quotation(organization_id, quotation_id)` (migration `20261104110000_get_quotation.sql`) returns the header and its items as one JSON document built by one SQL statement, so both come from the same snapshot.
+
+- It is `SECURITY INVOKER`, `STABLE` and `search_path = ''`, so RLS on `quotations` and `quotation_items` applies. It is executable by `authenticated` only.
+- `organization_id` is an extra filter that never widens access.
+- Unknown, other-tenant and disabled-member cases all return NULL.
+- Money, quantities and rates are JSON strings (`::text`). Items are ordered by `sort_order, id`.
+- `getQuotation()` makes exactly one `rpc("get_quotation")` call. `lib/quotations/quotations.test.ts` fails if it queries tables directly or makes more than one call.
+
+**Consequences:** Future document reads (sales orders, invoices) should follow the same one-statement rule. A real two-session race cannot be reproduced in the single-session SQL Editor. The guarantee rests on PostgreSQL statement snapshots and on the test that pins `getQuotation()` to one statement.
+
+## 021 — Document UI: allowlisted line payload, current-reference options, calendar dates, browser print
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Quotation Management Part 2 adds the first document pages. Sales orders and invoices will need the same pieces: a dynamic line-item form, customer and product pickers, date display and a printable copy.
+
+**Decision:**
+
+- **Line payload.** The form keeps lines in client state and submits them as one hidden JSON field. The server reads it with an allowlist (`parseFormItems()`): string fields only (product, description, quantity, unit price, discount, tax rate, a client key), at most 101 lines read and 1 MB, anything else is ignored. Snapshot fields, amounts, totals and the organization are never sent. The client key maps per-line errors back to the right line after lines are added or removed.
+- **Choices keep current references.** Customers and products are chosen with a server-side search (amended after the Part 2 review: originally a capped list of 500, which made later records unreachable). The form's Server Actions take the tenant from the session and call the existing `list_customers()` / `list_products()` RPCs with status `active` and 25 rows per search (same matching, trimming, literal wildcards and `created_at desc, id desc` order as the list pages; no new migration). Product matches are read once more by ID for the description used to prefill a line. Separately, every record the document already references is fetched by ID within the tenant even when inactive (`getCustomerOption()` / `getProductOptions()` in `lib/quotations/options.ts`), and the form keeps it, plus every record chosen since, in state. An edit therefore never shows an empty field for an existing reference, and searching or saving unrelated changes never clears or swaps it. Other-tenant IDs are simply not found.
+- **Preview, not authority.** The form preview reuses `validateQuotationItem()` and `calculations.ts` (BigInt on decimal strings). The database result is what is saved and shown afterwards.
+- **Calendar dates.** PostgreSQL `date` values (`quotation_date`, `expiry_date`) are formatted with `formatCalendarDate()` (UTC), never `formatDate()`, which would read them as UTC midnight and show the previous day west of UTC. "Today" for a new document is computed in the organization's time zone (`todayInTimeZone()`).
+- **Print.** A `/<document>/[id]/print` page styled as white paper with Tailwind `print:` variants and `@media print` in `globals.css`. The app chrome is `print:hidden`. Browser Print → Save as PDF; no PDF library. The letterhead uses the organization's current details (not a snapshot).
+
+**Consequences:** Every active customer and product is reachable by search. Results are ordered newest first (the list RPCs' order), not by name; a search for a common word shows the 25 newest matches and asks for a longer term. The quotation list's customer filter still uses the capped, name-ordered list (unchanged). Printed letterheads change when the organization's details change; only the document content is historical.
+
+## 022 — Sales orders: numbering, statuses, one order per accepted quotation, conversion snapshots, immutable after confirmation
+
+Date: 2026-11-04
+Status: accepted
+
+**Context:** Sales Order Management Part 1 adds the second transaction document. An order can be created directly or converted from an accepted quotation. The accepted quotation is the commercial agreement, so the order must reflect it even if master data changed afterwards. Authenticated users can call the API directly.
+
+**Decision:**
+
+- **Same shape as quotations (DECISIONS 018).** `sales_orders` + `sales_order_items`, `SELECT`-only for clients (RLS `is_org_member`), writes only through `SECURITY DEFINER` functions (`create_sales_order`, `create_sales_order_from_quotation`, `update_sales_order_draft`, `set_sales_order_status`), composite tenant FKs (customer, product, header, source quotation), triggers for identity, transitions and post-draft immutability, one-statement read `get_sales_order()` (DECISIONS 020). The line CHECK constraint, rounding and TypeScript calculations are the quotation ones, reused, not copied (`lib/sales-orders/calculations.ts` re-exports `lib/quotations/calculations.ts`; `validateSalesOrderItem()` wraps `validateQuotationItem()`). The SQL line parsing reuses `quotation_parse_decimal()`.
+- **Numbering:** `SO-000001`, … per organization from `document_number_counters` with `document_type = 'sales_order'` (DECISIONS 017). The type check was widened in the migration. Failed creates and failed conversions roll back their number.
+- **Statuses:** `draft → confirmed | cancelled`, `confirmed → completed | cancelled`. `completed` and `cancelled` are terminal; no delivery or shipping statuses in V1.
+- **Permissions:** every active member may view, create, convert, edit drafts and confirm. Owners and managers may also complete and cancel. Enforced in `lib/sales-orders/permissions.ts`, the domain functions and `set_sales_order_status()`.
+- **One order per quotation:** `unique (organization_id, source_quotation_id)`. Direct orders have `source_quotation_id` NULL and are not limited, because NULLs are distinct. The conversion function checks first for a clear `23505`. Under concurrency, the second conversion waits on the counter row and then hits the unique constraint (`23505`), so it rolls back. A cancelled order still counts: the quotation cannot be converted again.
+- **Conversion copies the quotation, not the master data:** customer reference and snapshot, notes, and every line (product reference, snapshot, quantity, price, discount, tax rate, tax amount, line total, order) are copied as stored on the quotation. Customers and products are not re-read, so renames, price changes and **deactivation after acceptance do not block conversion**. Recomputed header totals must equal the quotation's. The quotation itself is never modified. Only `accepted` quotations convert (`55000` otherwise). Unknown, other-tenant and disabled-member quotations all give `P0002`.
+- **Direct create and new selections need active master data:** an active customer and active products of the same organization, snapshotted from current data. This is the same rule as quotations.
+- **Draft edits re-snapshot only what changes.** This applies to direct and converted orders alike. Once edited, a converted order is its own document; the source quotation stays unchanged.
+  - Same `customer_id` as before: the snapshot is kept, and the customer may be inactive. A different customer must be active and is snapshotted fresh.
+  - An item may carry `id`, an existing line of the same order. With the same product, the line's product snapshot is kept, its price and description are the defaults, and the product may be inactive. Any other item (no `id`, or a changed product) is a new selection: an active product, with current snapshot and defaults. Unknown, other-order and repeated `id`s are rejected (`22023`), so no snapshot can be copied from another document.
+  - Quantities, prices, discounts and tax rates are always re-validated and recomputed.
+- **Immutable after confirmation:** once not `draft`, only `status` may change (trigger, whole-row comparison), and items cannot be inserted, updated or deleted. `source_quotation_id`, number, organization and creator never change, not even on a draft.
+- **Never deleted:** the same header trigger also fires on DELETE and rejects it for every status and every writer (`55000`), before the item cascade starts. Otherwise a privileged delete could remove an order, its items and its `source_quotation_id` link, and the quotation could then be converted again. The rule also blocks the `organizations` ON DELETE CASCADE. There is no organization-purge workflow in V1; one would have to be built explicitly.
+- **Out of scope in Part 1:** UI, inventory reservation or deduction, delivery, invoices, payments.
+
+**Consequences:**
+
+- Editing a draft without sending line `id`s re-snapshots every line from current products, and inactive products then block the save. The Part 2 form must send each existing line's `id`.
+- A quotation whose order was cancelled cannot be converted again. Re-ordering needs a new quotation or a direct order. Relaxing this later needs a new decision and a migration, because the uniqueness is a constraint.
+- Because a kept customer snapshot is not refreshed, a draft does not pick up customer detail changes unless the customer is changed. This differs from quotation drafts, which always re-snapshot.
+- When inventory arrives (Phase 3 / later Part), confirmation or completion is the natural hook for reservation or stock movements; drafts must keep not affecting stock.

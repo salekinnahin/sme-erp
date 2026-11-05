@@ -9,6 +9,8 @@ const PROTECTED_PREFIXES = [
   "/customers",
   "/vendors",
   "/products",
+  "/quotations",
+  "/sales-orders",
 ];
 const GUEST_ONLY_PATHS = ["/auth/login", "/auth/sign-up"];
 

@@ -256,7 +256,7 @@ Line 2')
   end;
 
   -- Helpers agree with lib/validation/text.ts
-  if public.trim_whitespace(E' \t\n\r\u000b\u000c\u0085        　﻿Acme  ') <> 'Acme' then
+  if public.trim_whitespace(E' \t\n\r\u000b\u000c\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeffAcme\u2029\u2028 ') <> 'Acme' then
     raise exception 'FAIL: trim_whitespace does not strip the whole whitespace set';
   end if;
   if public.trim_whitespace(E'​Acme') <> E'​Acme' then
@@ -268,6 +268,55 @@ Line 2')
   if not public.text_has_whitespace(E'a\u0085b') or public.text_has_whitespace('ab') then
     raise exception 'FAIL: text_has_whitespace is wrong';
   end if;
+
+  -- U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR are whitespace;
+  -- U+200B is not. Written as escapes so editors cannot drop them
+  -- (migration 20261104100000_restore_whitespace_line_separators.sql).
+  if public.trim_whitespace(E'\u2028Acme\u2029') <> 'Acme'
+     or public.trim_whitespace(E'\u2029Acme\u2028') <> 'Acme'
+     or public.trim_whitespace(E'\u2028') <> ''
+     or public.trim_whitespace(E'\u2029') <> ''
+     or public.trim_whitespace(E'A\u2028B') <> E'A\u2028B'
+     or public.trim_whitespace(E'\u200bAcme') <> E'\u200bAcme' then
+    raise exception 'FAIL: trim_whitespace mishandles U+2028 / U+2029 / U+200B';
+  end if;
+  if public.text_is_trimmed(E'\u2028') or public.text_is_trimmed(E'\u2029')
+     or public.text_is_trimmed(E'\u2028Acme') or public.text_is_trimmed(E'Acme\u2028')
+     or public.text_is_trimmed(E'\u2029Acme') or public.text_is_trimmed(E'Acme\u2029')
+     or not public.text_is_trimmed(E'A\u2028\u2029B')
+     or not public.text_is_trimmed(E'\u200bAcme') then
+    raise exception 'FAIL: text_is_trimmed mishandles U+2028 / U+2029 / U+200B';
+  end if;
+  if not public.text_has_whitespace(E'a\u2028b') or not public.text_has_whitespace(E'a\u2029b')
+     or public.text_has_whitespace(E'a\u200bb') then
+    raise exception 'FAIL: text_has_whitespace mishandles U+2028 / U+2029 / U+200B';
+  end if;
+  -- ... and the vendors constraints use them.
+  begin
+    insert into public.vendors (organization_id, name) values (v_org_a, E'\u2028');
+    raise exception 'FAIL: U+2028-only vendor name accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.vendors (organization_id, name) values (v_org_a, E'\u2029');
+    raise exception 'FAIL: U+2029-only vendor name accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.vendors (organization_id, name) values (v_org_a, E'\u2028Acme');
+    raise exception 'FAIL: vendor name with leading U+2028 accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.vendors (organization_id, name) values (v_org_a, E'Acme\u2029');
+    raise exception 'FAIL: vendor name with trailing U+2029 accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.vendors (organization_id, name, email) values (v_org_a, 'Acme', E'a\u2028b@acme.test');
+    raise exception 'FAIL: vendor email with U+2028 accepted';
+  exception when check_violation then null;
+  end;
 
   -- Character length counts code points, like charLength() in the app.
   -- U+1F600 is one code point (two UTF-16 code units, four UTF-8 bytes).

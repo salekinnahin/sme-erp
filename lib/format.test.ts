@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMoney, formatQuantity, plainDecimal } from "./format";
+import { formatCalendarDate, formatMoney, formatQuantity, plainDecimal } from "./format";
 
 describe("formatMoney", () => {
   it("groups thousands and shows two decimals in the base currency", () => {
@@ -30,5 +30,13 @@ describe("plainDecimal", () => {
     expect(plainDecimal("1000.50")).toBe("1000.5");
     expect(plainDecimal("100")).toBe("100");
     expect(plainDecimal("5.000")).toBe("5");
+  });
+});
+
+describe("formatCalendarDate", () => {
+  it("shows the stored calendar date, whatever the time zone", () => {
+    expect(formatCalendarDate("2026-11-04")).toBe("4 Nov 2026");
+    expect(formatCalendarDate("2026-01-01")).toBe("1 Jan 2026");
+    expect(formatCalendarDate("2028-02-29")).toBe("29 Feb 2028");
   });
 });

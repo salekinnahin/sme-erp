@@ -1,6 +1,6 @@
 # Data Model
 
-> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. `product_categories` and `products` exist, created by `supabase/migrations/20261104070000_products.sql`. Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
+> **Status:** The tenancy tables (`profiles`, `organizations`, `organization_members`) exist, created by `supabase/migrations/20261104000000_organizations_and_memberships.sql`. `customers` exists, created by `supabase/migrations/20261104020000_customers.sql`. `vendors` exists, created by `supabase/migrations/20261104050000_vendors.sql`. `product_categories` and `products` exist, created by `supabase/migrations/20261104070000_products.sql`. `quotations`, `quotation_items` and `document_number_counters` exist, created by `supabase/migrations/20261104090000_quotations.sql` (single-document read `get_quotation()` added by `20261104110000_get_quotation.sql`, list/search `list_quotations()` by `20261104120000_list_quotations.sql`). `sales_orders` and `sales_order_items` exist, created by `supabase/migrations/20261104130000_sales_orders.sql` (list/search `list_sales_orders()` added by `20261104140000_list_sales_orders.sql`). Everything else below is the **planned** model and guiding rules. Update this file in the same change as each migration.
 
 ## Global Rules
 
@@ -8,7 +8,9 @@
 - Every organization-owned table has RLS enabled. Policies allow access only to members of that organization.
 - Standard columns: `id uuid primary key`, `created_at timestamptz`, `updated_at timestamptz`, `created_by uuid` (references `auth.users`).
 - Money uses exact decimal types, never floating point. Prices are `numeric(18,2)` in the organization's base currency (DECISIONS 016); use the same type for future money columns unless a decision says otherwise. Read money as text (`::text`) and write it as a decimal string, so the app never parses it into a JavaScript number.
-- Document numbers, such as invoice and order numbers, are unique per organization: `unique (organization_id, number)`.
+- Document numbers, such as invoice and order numbers, are unique per organization: `unique (organization_id, number)`. They are generated in the database from `document_number_counters` (DECISIONS 017), never by the browser and never with `MAX + 1`.
+- Links between two tenant-owned tables use composite foreign keys `(organization_id, x_id)` → `x(organization_id, id)`, so a row can only reference rows of its own organization (DECISIONS 016). `customers`, `products`, `quotations` and `sales_orders` have `unique (organization_id, id)` as the target.
+- Transaction documents snapshot the master data they show (DECISIONS 008). Historical display uses the snapshot columns, never a join to the live customer or product.
 - Index `organization_id`, foreign keys, status columns, frequently filtered dates, document numbers, and SKU.
 - Schema changes are made only through migrations.
 
@@ -25,6 +27,7 @@ Access rules:
 - API roles have `SELECT` only on these tables. There is no client write path.
 - RLS: a user reads their own profile, organizations where they are an **active** member, and membership rows that are their own or belong to such organizations.
 - `public.is_org_member(org_id)`: the RLS helper for every organization-owned table.
+- Shared text helpers `public.trim_whitespace()`, `public.text_is_trimmed()`, `public.text_has_whitespace()` (DECISIONS 014): last redefined by `20261104100000_restore_whitespace_line_separators.sql`, which restores U+2028 / U+2029 and writes the set with escapes (DECISIONS 019).
 - `public.create_organization(...)`: the only way to create an organization. Atomically inserts the organization and an `owner`/`active` membership for `auth.uid()`. Version 1 allows one active organization per user.
 - `public.has_org_role(org_id, roles[])`: true if the caller is an **active** member of `org_id` with one of `roles`. Used for role-restricted operations.
 
@@ -65,7 +68,7 @@ Access rules:
      or (notes is not null and not public.text_is_trimmed(notes));
   -- fix those rows, then: alter table public.customers validate constraint <name>;
   ```
-- Indexes: `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(created_by)`.
+- Indexes: `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(created_by)`, and unique `(organization_id, id)` (target of the quotations composite foreign key, added by `20261104090000_quotations.sql`).
 - Customers are never deleted. They are deactivated (`status = 'inactive'`) and stay available to historical documents.
 - Duplicate names, emails and phone numbers are allowed in Version 1.
 
@@ -149,9 +152,9 @@ A flat list of product categories per organization (no hierarchy).
 - There is **no stock quantity column**. Stock on hand will be derived from `stock_movements` (Phase 3, DECISIONS 007).
 - `numeric(18,2)` rounds extra decimals on input. The app rejects more than 2 price decimals (3 for the reorder level) before writing, so only a direct API call can be rounded.
 - Product type changes are allowed while no stock data exists. Once stock movements exist, changing an inventory product with movements to another type needs a rule (DECISIONS 016).
-- Indexes: unique `(organization_id, lower(sku))`, `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, category_id)`, `(created_by)`.
+- Indexes: unique `(organization_id, lower(sku))`, `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, category_id)`, `(created_by)`, and unique `(organization_id, id)` (target of the quotation items composite foreign key, added by `20261104090000_quotations.sql`).
 - Never deleted. Inactive products stay editable and visible to historical documents; future transaction forms should offer only active products.
-- Future documents (quotations, orders, invoices, bills) must snapshot name, SKU and price on their lines (DECISIONS 008); editing a product does not change them.
+- Documents snapshot name, SKU, unit, description and price on their lines (DECISIONS 008); editing a product does not change them. Quotations do this since `20261104090000_quotations.sql`; orders, invoices and bills must follow.
 
 Access rules (same pattern as `customers` and `vendors`):
 
@@ -166,10 +169,127 @@ Access rules (same pattern as `customers` and `vendors`):
 
 ## Sales
 
+### `quotations` (implemented)
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade. Taken from the customer's organization by `create_quotation()`; never changes |
+| `quotation_number` | text, not null | `QT-000001`, `QT-000002`, … per organization (`^QT-[0-9]{6,}$`; 7+ digits after 999999). Unique `(organization_id, quotation_number)`. Generated by the database; never changes |
+| `customer_id` | uuid, not null | Composite FK `(organization_id, customer_id)` → `customers(organization_id, id)` |
+| `customer_name` | text, not null | Snapshot, 1–200 code points |
+| `customer_company_name`, `customer_phone`, `customer_email`, `customer_address`, `customer_tax_number` | text | Snapshot of the customer at create / last draft update |
+| `quotation_date` | date, not null | Finite |
+| `expiry_date` | date | Optional. Finite, `>= quotation_date` |
+| `status` | text, not null | `draft` (default), `sent`, `accepted`, `rejected`, `expired`, `cancelled` |
+| `notes` | text | Optional. Trimmed (shared whitespace set), 1–2000 code points |
+| `subtotal`, `discount_total`, `tax_total`, `grand_total` | numeric(18,2), not null | Computed by the database from the items. CHECK: non-negative, `discount_total <= subtotal`, `grand_total = subtotal - discount_total + tax_total` |
+| `created_by` | uuid | → `auth.users(id)` on delete set null. Set to `auth.uid()` by the database |
+| `created_at`, `updated_at` | timestamptz, not null | `updated_at` maintained by `set_updated_at` |
+
+### `quotation_items` (implemented)
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade |
+| `quotation_id` | uuid, not null | Composite FK `(organization_id, quotation_id)` → `quotations(organization_id, id)` on delete cascade |
+| `product_id` | uuid, not null | Composite FK `(organization_id, product_id)` → `products(organization_id, id)` |
+| `product_name`, `sku`, `unit` | text, not null | Snapshot from the product, always taken by the database |
+| `description` | text | Product description by default; the user may replace or clear it. Trimmed, 1–2000 code points |
+| `quantity` | numeric(18,3), not null | `> 0`, not NaN |
+| `unit_price` | numeric(18,2), not null | Product selling price by default; the user may override it. `>= 0` |
+| `discount_amount` | numeric(18,2), not null | Default 0. `0 <= discount <= round(quantity × unit_price, 2)` |
+| `tax_rate` | numeric(5,2), not null | Percent, default 0, `0..100` |
+| `tax_amount`, `line_total` | numeric(18,2), not null | Computed. CHECK `quotation_items_amounts_check` enforces the calculation model below |
+| `sort_order` | integer, not null | 1–100, position in the quotation. Unique `(organization_id, quotation_id, sort_order)` |
+| `created_at`, `updated_at` | timestamptz, not null | |
+
+Calculation model (DECISIONS 018), all values non-negative, `round()` = half up:
+
+```text
+gross      = round(quantity × unit_price, 2)
+taxable    = gross − discount_amount
+tax_amount = round(taxable × tax_rate × 0.01, 2)
+line_total = taxable + tax_amount
+
+subtotal = Σ gross        discount_total = Σ discount_amount
+tax_total = Σ tax_amount  grand_total = subtotal − discount_total + tax_total
+```
+
+`gross` is not stored; it equals `line_total − tax_amount + discount_amount`. A quotation has 1–100 items.
+
+### `document_number_counters` (implemented, internal)
+
+`(organization_id, document_type)` primary key, `last_value bigint`, `updated_at`. `document_type` is `quotation` or `sales_order` (widened by `20261104130000_sales_orders.sql`). No client privileges, RLS on with no policies. Only `public.next_document_number()` (no client EXECUTE) writes it (DECISIONS 017).
+
+### Quotation access rules
+
+- `authenticated` has `SELECT` only on `quotations` and `quotation_items`, limited by RLS to organizations where the caller is an **active** member. There is no INSERT, UPDATE or DELETE privilege or policy. `anon` has nothing.
+- Writes go only through `SECURITY DEFINER` functions with `search_path = ''`:
+  - `create_quotation(customer_id, quotation_date, expiry_date, notes, items jsonb) → uuid`. Any active member. The organization is the customer's, and only if the caller is an active member of it. The customer must be active. Derives the number, `created_by`, snapshots and all amounts.
+  - `update_quotation_draft(quotation_id, customer_id, quotation_date, expiry_date, notes, items jsonb)`. Any active member, `draft` only. It updates the header and replaces all items in one transaction, re-snapshotting the customer and products from current master data. The customer and every product must be active.
+  - `set_quotation_status(quotation_id, status)`. `sent` for any active member; `accepted`, `rejected`, `expired`, `cancelled` for owners and managers.
+- Reads of a single document use `get_quotation(organization_id, quotation_id) → jsonb` (`SECURITY INVOKER`, RLS applies): header and items from one statement, money as JSON strings, items ordered by `sort_order, id`, NULL when not visible (DECISIONS 020). Do not read the header and items with separate requests.
+- Lists use `list_quotations(organization_id, search, status, customer_id, limit, offset)` (`SECURITY INVOKER`, RLS applies). Search is a case-insensitive substring of `quotation_number` or the `customer_name` snapshot (wildcards literal, trimmed with the shared whitespace set, 100 code points). `grand_total` is text. Order `created_at desc, id desc`; limit clamped to 1–100; `total_count` before limit/offset.
+- `items` is a JSON array of `{ product_id, quantity, unit_price?, discount_amount?, tax_rate?, description? }`. Decimals are strings (or JSON numbers) with at most 3 (quantity) / 2 (money, rate) decimals; extra decimals are rejected, not rounded. A missing or null `unit_price` uses the product's selling price (error if it has none). A missing `description` key uses the product's description; a present key (string or null) is the user's value. Any other key (`product_name`, `sku`, `unit`, `tax_amount`, `line_total`, …) is ignored.
+- Errors: `42501` not authenticated / role not allowed; `P0002` quotation not found (unknown, other tenant and disabled member alike); `23503` customer or product not found (any tenant) or inactive; `22023` invalid input; `22003` amount too large for `numeric(18,2)`; `55000` not a draft / transition not allowed.
+- Triggers, for every writer, including `postgres`:
+  - `quotations_enforce_rules`: `organization_id`, `quotation_number`, `created_at` never change; `created_by` may only become NULL. Status changes must be allowed transitions (`quotation_status_transition_allowed()`). Once `status <> 'draft'`, no column other than `status`, `updated_at` and `created_by` (to NULL) may change.
+  - `quotation_items_enforce_draft`: items may only be inserted, updated or deleted while their quotation is `draft`. Deleting an organization still cascades.
+- Status transitions: `draft → sent | cancelled`, `sent → accepted | rejected | expired | cancelled`. `accepted`, `rejected`, `expired`, `cancelled` are terminal. Repeating the current status is rejected. There is no automatic expiry in V1.
+- Indexes: `quotations (organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, quotation_date desc)`, `(organization_id, customer_id)`, `(created_by)`, unique `(organization_id, quotation_number)`, unique `(organization_id, id)`; `quotation_items` unique `(organization_id, quotation_id, sort_order)`, `(organization_id, product_id)`.
+- Quotations never affect inventory and are never deleted (by any writer).
+
+### `sales_orders` (implemented)
+
+| Column | Type | Rules |
+| --- | --- | --- |
+| `id` | uuid | Primary key |
+| `organization_id` | uuid, not null | → `organizations(id)` on delete cascade. From the customer (direct) or the quotation (conversion), through the caller's active membership; never changes |
+| `sales_order_number` | text, not null | `SO-000001`, … per organization (`^SO-[0-9]{6,}$`). Unique `(organization_id, sales_order_number)`. Generated by the database (`next_document_number(org, 'sales_order')`); never changes |
+| `customer_id` | uuid, not null | Composite FK `(organization_id, customer_id)` → `customers(organization_id, id)` |
+| `source_quotation_id` | uuid | NULL for direct orders. Composite FK `(organization_id, source_quotation_id)` → `quotations(organization_id, id)`. Unique `(organization_id, source_quotation_id)`: one order per quotation (NULLs are distinct, so direct orders are unaffected). Set only by conversion; never changes |
+| `customer_name` | text, not null | Snapshot, 1–200 code points |
+| `customer_company_name`, `customer_phone`, `customer_email`, `customer_address`, `customer_tax_number` | text | Snapshot: from the customer (direct create, customer change on a draft) or copied from the quotation (conversion) |
+| `order_date` | date, not null | Finite |
+| `expected_delivery_date` | date | Optional. Finite, `>= order_date` |
+| `status` | text, not null | `draft` (default), `confirmed`, `completed`, `cancelled` |
+| `notes` | text | Optional. Trimmed, 1–2000 code points. Conversion copies the quotation's notes |
+| `subtotal`, `discount_total`, `tax_total`, `grand_total` | numeric(18,2), not null | Computed by the database from the items; same CHECK as quotations |
+| `created_by` | uuid | → `auth.users(id)` on delete set null. `auth.uid()` |
+| `created_at`, `updated_at` | timestamptz, not null | |
+
+### `sales_order_items` (implemented)
+
+Same columns, types and CHECK constraints as `quotation_items` (including `sales_order_items_amounts_check`, the calculation model above), with `sales_order_id` instead of `quotation_id`: composite FK `(organization_id, sales_order_id)` → `sales_orders(organization_id, id)` on delete cascade, composite FK `(organization_id, product_id)` → `products(organization_id, id)`, unique `(organization_id, sales_order_id, sort_order)`. A sales order has 1–100 items.
+
+Snapshot sources for `product_name`, `sku`, `unit` (and the default `unit_price` / `description`):
+
+- direct create, or a new line on a draft: the active product's current data
+- conversion: the quotation line, copied with its quantity, price, discount, tax rate and amounts
+- a kept line on a draft (item `id` = an existing line of the same order, same product): that line
+
+### Sales order access rules
+
+- `authenticated` has `SELECT` only on `sales_orders` and `sales_order_items` (RLS `is_org_member`). No INSERT, UPDATE or DELETE privilege or policy. `anon` has nothing.
+- Writes go only through `SECURITY DEFINER` functions with `search_path = ''`:
+  - `create_sales_order(customer_id, order_date, expected_delivery_date, notes, items jsonb) → uuid`. Any active member. Active customer and active products of the same organization. Items as for `create_quotation`, plus `id` is rejected (no existing lines).
+  - `create_sales_order_from_quotation(quotation_id, order_date, expected_delivery_date default null) → uuid`. Any active member. The quotation must be `accepted` and not yet converted. Copies customer reference and snapshot, notes, and every line as stored; customers and products are not re-read, so their later changes or deactivation do not matter. Recomputed totals must equal the quotation's. The quotation is not modified. The result is a `draft`.
+  - `update_sales_order_draft(sales_order_id, customer_id, order_date, expected_delivery_date, notes, items jsonb)`. Any active member, `draft` only, direct or converted. Header updated and all items replaced in one transaction. Unchanged `customer_id`: snapshot kept (customer may be inactive). Changed: active customer, fresh snapshot. Each item may carry `id` (an existing line of this order, at most once; unknown or repeated → `22023`): with the same `product_id` the line's snapshot is kept and its price and description are the defaults, and the product may be inactive. Any other item is a new selection and needs an active product.
+  - `set_sales_order_status(sales_order_id, status)`. `confirmed` for any active member; `completed`, `cancelled` for owners and managers. Same lookup-then-lock pattern as `set_quotation_status`.
+- `get_sales_order(organization_id, sales_order_id) → jsonb` (`SECURITY INVOKER`): header (including `source_quotation_number`) and items in one statement, money as strings, NULL when not visible.
+- Lists use `list_sales_orders(organization_id, search, status, customer_id, limit, offset)` (`SECURITY INVOKER`, RLS applies), same rules as `list_quotations`: search is a substring of `sales_order_number` or the `customer_name` snapshot, `grand_total` is text, order `created_at desc, id desc`, limit 1–100, `total_count` before limit/offset. Each row also carries `source_quotation_id` and `source_quotation_number`.
+- Errors: `42501` not authenticated / role not allowed; `P0002` sales order or (conversion) quotation not found, the same for unknown, other tenant and disabled member; `23503` customer or product not found or inactive; `22023` invalid input; `22003` amount too large; `23505` quotation already converted; `55000` not a draft / transition not allowed / quotation not accepted.
+- Triggers, for every writer: `sales_orders_enforce_rules` freezes `organization_id`, `sales_order_number`, `source_quotation_id`, `created_at` and `created_by` (except to NULL), checks transitions, after `draft` allows no change but `status`, and rejects every DELETE (any status, `55000` `sales orders cannot be deleted`), before the item cascade starts. Deleting an organization that has sales orders therefore fails too; a purge would need an explicit workflow. `sales_order_items_enforce_draft` allows item writes only while the order is `draft`.
+- Status transitions: `draft → confirmed | cancelled`, `confirmed → completed | cancelled`. `completed` and `cancelled` are terminal.
+- Indexes: `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, order_date desc)`, `(organization_id, customer_id)`, `(created_by)`, unique `(organization_id, sales_order_number)`, `(organization_id, id)`, `(organization_id, source_quotation_id)`; items unique `(organization_id, sales_order_id, sort_order)`, `(organization_id, product_id)`.
+- Sales orders do not affect inventory in V1 Part 1 (no reservation, no deduction) and are never deleted by clients.
+
+### Other sales tables (planned)
+
 | Table | Notes |
 | --- | --- |
-| `quotations`, `quotation_lines` | Drafts do not affect inventory |
-| `sales_orders`, `sales_order_lines` | Drafts do not affect inventory |
 | `invoices`, `invoice_lines` | Lines snapshot product name, price and tax at the time of issue |
 | `customer_payments` | One row per payment transaction. Total valid payments may not exceed the invoice total |
 

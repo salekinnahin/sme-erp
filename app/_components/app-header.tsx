@@ -7,6 +7,8 @@ const NAV_LINKS = [
   { href: "/customers", label: "Customers" },
   { href: "/vendors", label: "Vendors" },
   { href: "/products", label: "Products" },
+  { href: "/quotations", label: "Quotations" },
+  { href: "/sales-orders", label: "Sales Orders" },
 ] as const;
 
 /** Minimal header with navigation for signed-in pages. */
@@ -17,7 +19,7 @@ export function AppHeader() {
         <Link href="/dashboard" className="text-xl font-semibold">
           SME ERP
         </Link>
-        <nav aria-label="Main" className="flex gap-4 text-sm">
+        <nav aria-label="Main" className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
           {NAV_LINKS.map((link) => (
             <Link
               key={link.href}

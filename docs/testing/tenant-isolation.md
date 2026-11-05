@@ -121,6 +121,10 @@ console.log(await (await fetch(`${url}/rest/v1/rpc/list_customers`, { method: "P
 console.log(await (await fetch(`${url}/rest/v1/customers?id=eq.${custA}`, { method: "DELETE", headers: h })).status); // 401/403
 ```
 
+### 3.3 Whitespace helpers (all suites)
+
+Since migration `20261104100000_restore_whitespace_line_separators.sql`, `customers.sql`, `vendors.sql`, `products.sql` and `quotations.sql` also check U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR: trimmed at both edges by `trim_whitespace()`, rejected by `text_is_trimmed()` at either edge or as the only content, detected anywhere by `text_has_whitespace()`, and rejected by the name, SKU, description, category and email constraints. U+200B is never whitespace. The whole-set test strings are written with `\uXXXX` escapes (DECISIONS 019).
+
 ## 4. Vendors
 
 Run after any change to `vendors`, its functions or policies, `lib/vendors/`, or `app/vendors/`. Vendors follow the customer pattern, so the checks mirror section 3.
@@ -189,3 +193,180 @@ Use Users A and B and the Organization A employee from section 3.2.
 | 13 | Open `/products/not-a-uuid` | "Product not found" |
 
 API probe: as in 3.2, with `products`, `set_product_status` (`p_product_id`), `set_product_category_status` (`p_category_id`) and `list_products`. Also try a `POST` to `products` in B's organization with `category_id` set to an Organization A category ID: expect a foreign-key error, the same as for a random UUID.
+
+## 6. Quotations
+
+Run after any change to `quotations`, `quotation_items`, `document_number_counters`, their functions, triggers or policies, `lib/quotations/`, or `app/quotations/`.
+
+### 6.1 Database test (automated SQL)
+
+File: `supabase/tests/quotations.sql`. Run it as a separate run in the SQL Editor, after migrations `20261104090000_quotations.sql`, `20261104100000_restore_whitespace_line_separators.sql`, `20261104110000_get_quotation.sql` and `20261104120000_list_quotations.sql`. Expected last result: `ALL QUOTATION CHECKS PASSED`. It is rolled back.
+
+It checks:
+
+- `anon` cannot read quotations or items, or call `create_quotation`, `update_quotation_draft`, `set_quotation_status` or `get_quotation`
+- `get_quotation` is a `SECURITY INVOKER`, `STABLE` SQL function with `search_path = ''`, executable by `authenticated` only. For the owner and the employee it returns the header and the items as one document: exact money and quantity strings (JSON strings, not numbers), items ordered by `sort_order`, item totals adding up to the header, and items identical to the table. It returns NULL for a wrong organization, an unknown ID, NULL arguments, user B (with either organization ID), a disabled member, and a manager disabled later
+- U+2028 / U+2029 at the start or end of notes and item descriptions are trimmed, U+2028-only notes and descriptions become empty, and inner U+2028 is kept
+- the three functions are `SECURITY DEFINER` with `search_path = ''`, executable by `authenticated` only; the internal helpers (`next_document_number`, `quotation_replace_items`, `quotation_parse_decimal`, `quotation_normalize_header`, `quotation_status_transition_allowed`, trigger functions) are not executable by API roles; `authenticated` has no INSERT/UPDATE/DELETE (table or column) on either table and cannot read the counters; `set_quotation_status` locks only through the role-checked predicate
+- creation: organization, `created_by`, `draft` status, number `QT-000001`, `QT-000002`, … and customer and product snapshots are derived by the database; forged `product_name`, `sku`, `unit`, `tax_amount` and `line_total` keys are ignored; notes and descriptions are trimmed with the shared whitespace set; unit price and description default to the product's and can be overridden (or the description cleared); 100 items and 2000-code-point notes and descriptions are accepted
+- totals and rounding: exact values for decimal quantities, half-up rounding of gross and tax (`1.005 × 1.00 = 1.01`, `10.00 × 0.05% = 0.01`, `0.001 × 0.01 = 0.00`), discount equal to gross, and grand total = sum of line totals
+- rejected input: no items, 101 items, non-array or non-object items, missing or malformed product, zero / negative / 4-decimal / NaN / exponent / missing quantity, negative or 3-decimal price, no price available, tax over 100, negative or 3-decimal tax, negative discount, discount over gross, over-long description or notes, missing or infinite dates, expiry before the quotation date, amounts over `numeric(18,2)`, inactive customer or product
+- failed creates consume no numbers (the next one continues without a gap)
+- unknown and other-tenant customers and products fail identically (`23503`)
+- direct writes as an owner are refused (`42501`): insert, update of totals, `organization_id`, number, `created_by`, `status` or notes, delete, and item insert, update and delete
+- snapshots: renaming the customer and product, changing the product's price, SKU, unit and description leave existing quotations unchanged; a draft update re-snapshots from current master data, replaces the items, recomputes totals, and keeps number and creator; a failed draft update leaves the draft unchanged
+- draft update rejects inactive or other-tenant customers, other-tenant products, no items, and unknown IDs (`P0002`)
+- employee: reads, creates, edits drafts and marks sent; cannot cancel, accept, reject or expire, from draft or from sent (`42501`)
+- every allowed transition by a manager; invalid ones (`55000`): repeating `sent`, any change from a terminal status, draft straight to accepted / rejected / expired; `draft`, unknown, wrong-case, empty and NULL statuses (`22023`)
+- after sent (and accepted): `update_quotation_draft` fails with `55000`; as `postgres` (bypassing privileges), the triggers still reject header changes (notes, customer, dates, totals), item insert, update and delete, identity changes on a draft, and invalid status updates; `created_by` may still become NULL
+- table constraints (as `postgres`): inconsistent line total or tax amount, zero quantity, tax rate over 100, inconsistent grand total, and links to another organization's customer, product or quotation are rejected
+- user B cannot read Organization A quotations or items, has separate numbering (`QT-000001`), cannot use A's customer or product, and update and status changes of A's quotation fail exactly like unknown IDs (`P0002: quotation not found`)
+- a disabled member, and a manager disabled later, cannot read, list, create, update or change status
+- `list_quotations`: `anon` cannot call it; `SECURITY INVOKER`, `STABLE` SQL, `search_path = ''`, `authenticated` only. Unfiltered it returns every quotation of the organization ordered `created_at desc, id desc` (the tie-breaker alone decides inside the test transaction). Rows carry the customer-name snapshot and `grand_total` as exact text. Search by number (substring, any case, NBSP/U+3000-padded) and by customer name uses the snapshot (a renamed customer's old quotations match the old name only); `%` and `_` are literal; `\` and unknown terms match nothing; whitespace-only lists everything. Status filter for each of the six statuses, combined with search, unknown status matches nothing. Customer filter for an own customer, a customer without quotations, and another tenant's customer. Consecutive pages are slices of the ordered list with a stable `total_count`; limit/offset clamping. Another or no organization ID returns nothing; the employee sees the same list; user B gets nothing of A with any filter and only B's own quotation in B
+
+Not covered by the script (needs two sessions; the SQL Editor runs one): concurrent creates, and a draft saved while `get_quotation` runs (it reads in one statement, so it sees either the old or the new document, never a mix). To check by hand with two `psql` sessions as the same organization member, `begin;` and call `create_quotation(...)` in both. The second waits until the first commits, then gets the next number.
+
+### 6.2 API probe (manual)
+
+As User B (section 2 probe variables), with Organization A's quotation and customer IDs. Every result must be empty or an error:
+
+```js
+const qA = "<Quotation A id>", custA = "<Customer A id>", prodA = "<Product A id>";
+console.log(await (await fetch(`${url}/rest/v1/quotations?id=eq.${qA}`, { headers: h })).json());                      // []
+console.log(await (await fetch(`${url}/rest/v1/quotation_items?quotation_id=eq.${qA}`, { headers: h })).json());       // []
+console.log(await (await fetch(`${url}/rest/v1/quotations?id=eq.${qA}`, { method: "PATCH", headers: h,
+  body: JSON.stringify({ grand_total: 1 }) })).status);                                                                  // 401/403
+console.log(await (await fetch(`${url}/rest/v1/rpc/set_quotation_status`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_quotation_id: qA, p_status: "cancelled" }) })).json());                                       // "quotation not found"
+console.log(await (await fetch(`${url}/rest/v1/rpc/create_quotation`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_customer_id: custA, p_quotation_date: "2026-11-04", p_expiry_date: null, p_notes: null,
+    p_items: [{ product_id: prodA, quantity: "1" }] }) })).json());                                                      // "customer not found"
+```
+
+### 6.3 UI test (manual)
+
+Use Users A and B and the Organization A employee from section 3.2. Organization A needs an active customer, an inactive customer, an active product with a selling price (`Laptop`, 100.00), an active service without one, and one inactive product.
+
+| # | Step | Expected |
+| --- | --- | --- |
+| 1 | As A, open **Quotations** in the header | "No quotations yet." and "Create your first quotation" |
+| 2 | New quotation; click into Customer, then into Product on line 1 | Quotation date is today (organization time zone). Each field shows "Searching…", then up to 25 active records (newest first). Typing searches the server (customer: name, company, phone, email; product: name, SKU, category). The inactive customer and inactive product are never offered; a term with no match shows "No active customers found." / "No active products found."; more than 25 matches shows "More results match…". Enter in the search field never submits the form |
+| 2a | With 500+ active customers and products, search for the last one by name (and a product by SKU); search `%` and `_` | Found and selectable; `%` / `_` match only records that contain those characters |
+| 3 | Choose `Laptop` on line 1 | Description and unit price `100.00` are prefilled; unit shows `pcs`. Quantity `2.5`, discount `10`, tax `15` → line total `BDT 276.00` |
+| 4 | Add a line: the service, quantity `3`, unit price `33.33`, tax `7.5` | Line total `BDT 107.49`; totals 349.99 / 10.00 / 43.50 / 383.49 |
+| 5 | Set expiry before the quotation date, quantity `0` on a line, discount `999` on another, tax `101`; submit | Per-field errors next to each field; nothing is created; the lines are kept |
+| 6 | Leave the service's unit price blank and submit | "Enter a unit price. This product has no selling price." on that line |
+| 7 | Fix and create; double-click Create | "Creating…"; lands on `QT-000001` detail with exactly the previewed totals. One quotation exists |
+| 8 | Rename the customer and change `Laptop`'s price; reopen the quotation | Detail still shows the old customer name and `100.00` (snapshot) |
+| 9 | Edit the draft, change only the notes, save | Customer and products unchanged (not cleared); line prices unchanged; the customer snapshot now shows the new name. Opening a search and closing it without choosing (Escape or click away), or a search with no result, keeps the selection |
+| 10 | Deactivate the customer, open Edit | The customer shows "(inactive)" with a warning; saving shows "This customer is inactive…". Same for an inactive product on a line |
+| 11 | As the employee, open the draft | Edit, Print and only **Mark sent** shown. Mark sent (confirm) → status Sent; Edit disappears; no further buttons |
+| 12 | As the employee, open `/quotations/<id>/edit` of the sent quotation | Redirected to the detail page |
+| 13 | As A, on the sent quotation | Accept, Reject, Expire, Cancel quotation shown. Accept → no buttons left |
+| 14 | As A, open a stale tab of the sent quotation after accepting it elsewhere and click Reject | "This status change is not possible from the quotation's current status…" |
+| 15 | Create 26+ quotations; page through; search `QT-00001`, part of a customer name; filter by status and by customer | 25 per page, newest first; filters kept across pages; empty search result offers "Clear search and filters" |
+| 16 | Print from the detail page; open the browser print preview | Organization name and contact details, number, dates, customer snapshot, items, totals, notes. No header, navigation or buttons. Readable in dark mode (paper is white). Save as PDF works |
+| 17 | As B, open `/quotations/<A id>`, `/edit`, `/print`; `/quotations?customer=<A customer id>`; on B's new quotation, search A's customer and product names and SKU | "Quotation not found" for all three; the list shows nothing of A; the searches find nothing of A |
+| 18 | Open `/quotations/not-a-uuid` and `/quotations/not-a-uuid/print` | "Quotation not found" |
+
+## 7. Sales orders
+
+Run after any change to `sales_orders`, `sales_order_items`, their functions, triggers or policies, `document_number_counters`, the quotation tables, or `lib/sales-orders/`.
+
+### 7.1 Database test (automated SQL)
+
+File: `supabase/tests/sales_orders.sql`. Run it as a separate run in the SQL Editor, after all migrations up to `20261104140000_list_sales_orders.sql`. Expected last result: `ALL SALES ORDER CHECKS PASSED`. It is rolled back.
+
+It checks:
+
+- `anon` cannot read orders or items, or call any of the five functions
+- definitions: the four write functions are `SECURITY DEFINER` with `search_path = ''`, `authenticated` only. The internal helpers (`sales_order_replace_items`, `sales_order_recompute_totals`, `sales_order_normalize_header`, `sales_order_status_transition_allowed`, the trigger functions, `next_document_number`) have a fixed `search_path` and cannot be executed by API roles. `get_sales_order` is `SECURITY INVOKER`, `STABLE` SQL. `set_sales_order_status` locks only through the role-checked predicate. No INSERT/UPDATE/DELETE (table or column) for API roles. The counter type check allows `sales_order`
+- direct creation: `SO-000001`, `SO-000002`, … per organization; organization, creator, `draft`, `source_quotation_id` NULL and customer and product snapshots derived by the database; forged snapshot, amount and organization keys ignored; trimming (including U+2028 / U+2029); defaults and overrides of price and description; 100 items and 2000-code-point notes and descriptions accepted
+- calculations: the quotation examples (349.99 / 10.00 / 43.50 / 383.49 and the rounding set `1.01, 10.01, 0.00, 66.38, 0.00` → 75.98 / 5.97 / 7.39 / 77.40)
+- rejected input: the quotation list (items, quantity, price, tax, discount, description, overflow, inactive / other-tenant product), plus a line `id` on create, a product deactivated after a quotation, missing or infinite dates, expected delivery before the order date, over-long notes, and an inactive, deactivated or NULL customer. Failures consume no numbers. Unknown and other-tenant customers and products fail identically
+- conversion of an accepted quotation whose customer and one product were deactivated, and whose other product was renamed and repriced, after acceptance:
+  - it succeeds as a `draft` with `source_quotation_id` set
+  - the customer snapshot, notes and every line (column for column) come from the quotation, not the master data
+  - totals are equal to the quotation's
+  - the quotation is byte-for-byte unchanged
+- conversion is refused for a second time (`23505`), for draft, sent, rejected, expired and cancelled quotations (`55000`), for invalid dates (`22023`), and for unknown, NULL and other-tenant quotations (`P0002`, identical)
+- `get_sales_order`: one document with exact strings, `source_quotation_number`, ordered items; NULL for a wrong organization, unknown ID or NULLs
+- direct writes as an owner (`42501`): insert (also with a forged `source_quotation_id`), update of number, organization, creator, source quotation, totals, snapshot, status, notes, delete, and item insert, update and delete; internal helpers not callable
+- snapshots survive customer and product changes
+- draft edits:
+  - an unchanged customer keeps its snapshot; a changed customer is re-snapshotted (also when changed back)
+  - kept lines (`id` + same product) keep their snapshot and price; new lines take the current product
+  - a converted draft with an inactive customer and an inactive product can be saved with its lines kept, and totals are recomputed
+  - rejected: a new line of an inactive product; a line `id` with a changed, inactive product; another order's, an unknown, a repeated or a non-string line `id`; a change to an inactive customer; a zero quantity. Each rejection leaves the order unchanged
+  - a line `id` with a changed, active product re-snapshots
+  - the source quotation stays unchanged throughout
+- employee: reads, converts, creates, edits drafts and confirms; cannot complete or cancel, from draft or confirmed (`42501`)
+- manager: every allowed path; invalid transitions (`55000`); `draft`, unknown, wrong-case, empty, quotation statuses and NULL (`22023`)
+- after confirmation (and for completed and cancelled orders): `update_sales_order_draft` fails (`55000`). As `postgres`, the triggers still reject:
+  - header, customer, date and total changes
+  - item insert, update and delete
+  - identity changes (number, organization, creator, `source_quotation_id` set or cleared), even on a draft
+  - invalid status updates
+
+  `created_by` may still become NULL
+- no deletion (as `postgres`): deleting a direct draft, confirmed, completed, cancelled (from draft and from confirmed), converted draft or converted completed order fails (`55000`). Header, items and `source_quotation_id` remain. Bulk and organization deletes fail too. Both source quotations still cannot be converted again (`23505`). UPDATE immutability is unchanged
+- table constraints (as `postgres`):
+  - inconsistent line, tax or grand total; zero quantity; tax over 100; delivery before the order date
+  - links to another tenant's product, customer, sales order or quotation
+  - a second order for the same quotation (`23505`); a duplicate number; a malformed number
+- user B:
+  - cannot read A's orders or items
+  - converts B's own quotation as `SO-000001`
+  - converting A's quotation, updating A's order and changing its status all fail exactly like unknown IDs (`P0002`)
+  - cannot use A's customer or product, or a foreign line `id`
+- `list_sales_orders` (Part 2): `anon` cannot call it; `SECURITY INVOKER`, `STABLE` SQL, `search_path = ''`, `authenticated` only. As owner A: every order, newest first with the ID tie-breaker; row content (snapshot name, money as text, dates, `source_quotation_number` for converted orders, NULL for direct ones); number search (substring, any case, Unicode-padded); customer search uses the snapshot, not a later rename; `%`, `_`, `\` literal; whitespace-only search lists everything; each status filter, alone and with a search; customer filter (own, without orders, other tenant's); consecutive pages, stable `total_count`, clamped limit and offset; another or NULL organization gives nothing. The tenant-filtered lookup of a quotation's sales order. The employee sees the same total. User B lists nothing of A whatever the filters, and only B's own converted order
+- a disabled member, and a manager disabled later, cannot read, list, create, convert, update or change status
+
+Not covered by the script (needs two sessions): concurrent conversions of the same quotation. To check by hand, open two `psql` sessions as the same member, `begin;`, and call `create_sales_order_from_quotation(<id>, current_date)` in both. The second waits for the first to commit and then fails with `23505`.
+
+### 7.2 API probe (manual)
+
+As User B (section 2 probe variables), with Organization A's sales order, accepted quotation and customer IDs. Every result must be empty or an error:
+
+```js
+const soA = "<Sales order A id>", qA = "<Accepted quotation A id>";
+console.log(await (await fetch(`${url}/rest/v1/sales_orders?id=eq.${soA}`, { headers: h })).json());                  // []
+console.log(await (await fetch(`${url}/rest/v1/sales_order_items?sales_order_id=eq.${soA}`, { headers: h })).json()); // []
+console.log(await (await fetch(`${url}/rest/v1/sales_orders?id=eq.${soA}`, { method: "PATCH", headers: h,
+  body: JSON.stringify({ status: "completed" }) })).status);                                                          // 401/403
+console.log(await (await fetch(`${url}/rest/v1/rpc/create_sales_order_from_quotation`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_quotation_id: qA, p_order_date: "2026-11-04" }) })).json());                               // "quotation not found"
+console.log(await (await fetch(`${url}/rest/v1/rpc/set_sales_order_status`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_sales_order_id: soA, p_status: "cancelled" }) })).json());                                 // "sales order not found"
+```
+
+```js
+console.log(await (await fetch(`${url}/rest/v1/rpc/list_sales_orders`, { method: "POST", headers: h,
+  body: JSON.stringify({ p_organization_id: "<Organization A id>" }) })).json());                                    // []
+```
+
+### 7.3 UI test (manual)
+
+Use Users A and B and the Organization A employee from section 3.2. Organization A needs an active customer, an active product with a selling price (`Laptop`, 100.00), an active service without one, and an accepted quotation.
+
+| # | Step | Expected |
+| --- | --- | --- |
+| 1 | As A, open **Sales Orders** in the header | "No sales orders yet." and "Create your first sales order" |
+| 2 | New sales order; open Customer and Product search | Order date is today (organization time zone); expected delivery empty. Same selector as quotations: server search, active only, 25 per search, "More results match…", Enter never submits. Find a record beyond the first 500 by name / SKU |
+| 3 | Choose `Laptop`, quantity `2.5`, discount `10`, tax `15`; add the service at `33.33`, quantity `3`, tax `7.5` | Unit `pcs` shown (not editable); description and price prefilled; line totals `276.00` and `107.49`; totals 349.99 / 10.00 / 43.50 / 383.49 |
+| 4 | Expected delivery before the order date; quantity `0`; discount `999`; tax `101`; submit | Per-field errors; nothing created; lines kept |
+| 5 | Fix and create | Lands on `SO-000001` detail, status Draft, Source "Created directly", exactly the previewed totals |
+| 6 | Deactivate `Laptop`; Edit the draft; change only the notes; save | Line 1 still shows `Laptop` "(inactive)" with its recorded unit and price; a note says it can be kept. Saving succeeds; the line is unchanged |
+| 7 | Edit again: remove line 2, add a new line with an active product, change line 1 to another active product; save | Saved. Line 1 shows the new product's current details; the removed line is gone |
+| 8 | Edit: choose an inactive customer is impossible (not offered); change to another active customer; save | Customer snapshot is the new customer's current details |
+| 9 | As the employee, open the draft | Edit, Print, and only **Confirm**. Confirm → Confirmed; Edit disappears; no further buttons |
+| 10 | As A, on the confirmed order | **Mark completed** and **Cancel sales order**. Mark completed → no buttons |
+| 11 | Open the same draft in two tabs as A; cancel it in one; click Confirm in the other | "This status change is not possible…"; the page refreshes to Cancelled with no buttons |
+| 12 | Open Edit of a draft in one tab, confirm it in another, then save the edit | "This sales order is no longer a draft…" |
+| 13 | Open the accepted quotation | **Create sales order**. Click it, keep today's date, create → lands on the new draft order with the quotation's customer, lines and notes; Source links to the quotation |
+| 14 | Reopen the quotation | **View sales order** with its number; no Create button. A sent / draft / rejected quotation shows neither |
+| 15 | Open the accepted quotation in two tabs; convert in one, then submit the conversion in the other | "This quotation has already been converted to a sales order." and the panel switches to **View sales order**. Only one order exists |
+| 16 | Create 26+ orders; page through; search `SO-00001` and part of a customer name; filter by status and customer | 25 per page, newest first; Source column shows the quotation number or "Direct"; filters kept across pages |
+| 17 | Print from the detail page | Organization details, number, status, dates, customer snapshot, source quotation number, items, totals, notes; no app chrome; white paper in dark mode |
+| 18 | As B, open `/sales-orders/<A id>`, `/edit`, `/print`, `/sales-orders/not-a-uuid`; `/sales-orders?customer=<A customer id>` | "Sales order not found" for all; the list shows nothing of A |
+

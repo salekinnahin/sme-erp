@@ -1,3 +1,4 @@
+import { parseDecimal, type DecimalResult } from "@/lib/validation/decimal";
 import { isUuid, optionalText, tooLongMessage as tooLong } from "@/lib/validation/fields";
 import { charLength, trimText, truncateChars } from "@/lib/validation/text";
 
@@ -86,35 +87,11 @@ export const PRICE_FORMAT = { integerDigits: 16, scale: 2 } as const;
 export const REORDER_LEVEL_FORMAT = { integerDigits: 15, scale: 3 } as const;
 
 // -----------------------------------------------------------------------------
-// Decimals
+// Decimals (shared parser in lib/validation/decimal.ts, re-exported for
+// existing imports)
 // -----------------------------------------------------------------------------
 
-// Plain ASCII digits with an optional decimal point: "12", "12.5", ".5", "12.".
-// No sign, exponent, thousands separator or other numerals.
-const DECIMAL_RE = /^(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
-
-export type DecimalResult =
-  | { ok: true; value: string }
-  | { ok: false; error: "format" | "scale" | "too_large" };
-
-/**
- * Parses a non-negative decimal without converting it to a number. Returns a
- * canonical string ("007.50" -> "7.50", ".5" -> "0.5", "5." -> "5") that
- * PostgreSQL reads exactly. Rejects more decimals than `scale` instead of
- * rounding them.
- */
-export function parseDecimal(
-  raw: string,
-  format: { integerDigits: number; scale: number },
-): DecimalResult {
-  const match = DECIMAL_RE.exec(raw);
-  if (!match) return { ok: false, error: "format" };
-  const intPart = (match[1] ?? "").replace(/^0+(?=\d)/, "") || "0";
-  const fracPart = match[2] ?? match[3] ?? "";
-  if (fracPart.length > format.scale) return { ok: false, error: "scale" };
-  if (intPart.length > format.integerDigits) return { ok: false, error: "too_large" };
-  return { ok: true, value: fracPart ? `${intPart}.${fracPart}` : intPart };
-}
+export { parseDecimal, type DecimalResult };
 
 function decimalMessage(
   error: "format" | "scale" | "too_large",

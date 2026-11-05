@@ -297,6 +297,59 @@ Line 2', 1000.50, 1200, 5)
     raise exception 'FAIL: SKU with trailing U+0085 accepted';
   exception when check_violation then null;
   end;
+  -- U+2028 / U+2029 are whitespace (migration 20261104100000_restore_whitespace_line_separators.sql).
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, 'X', E'\u2028SKU-9', null, 'inventory', 'pcs');
+    raise exception 'FAIL: SKU with leading U+2028 accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, 'X', E'SKU-9\u2029', null, 'inventory', 'pcs');
+    raise exception 'FAIL: SKU with trailing U+2029 accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, 'X', E'\u2028', null, 'inventory', 'pcs');
+    raise exception 'FAIL: U+2028-only SKU accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, 'X', E'\u2029', null, 'inventory', 'pcs');
+    raise exception 'FAIL: U+2029-only SKU accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, E'\u2029Laptop', 'SKU-LS', null, 'inventory', 'pcs');
+    raise exception 'FAIL: product name with leading U+2029 accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, E'\u2028', 'SKU-LS', null, 'inventory', 'pcs');
+    raise exception 'FAIL: U+2028-only product name accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.products (organization_id, name, sku, description, product_type, unit)
+    values (v_org_a, 'X', 'SKU-LS', E'Desc\u2028', 'inventory', 'pcs');
+    raise exception 'FAIL: description with trailing U+2028 accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.product_categories (organization_id, name) values (v_org_a, E'\u2028');
+    raise exception 'FAIL: U+2028-only category name accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.product_categories (organization_id, name) values (v_org_a, E'Tools\u2029');
+    raise exception 'FAIL: category name with trailing U+2029 accepted';
+  exception when check_violation then null;
+  end;
   begin
     insert into public.products (organization_id, name, sku, product_type, unit)
     values (v_org_a, 'X', E'﻿', 'inventory', 'pcs');

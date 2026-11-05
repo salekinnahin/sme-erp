@@ -59,6 +59,34 @@ describe("hasWhitespace", () => {
   });
 });
 
+// Regression: U+2028 / U+2029 were once lost from the SQL helpers because a
+// literal copy of them was stripped by an editor. Escapes only here, and the
+// SQL suites check the same cases (migration
+// 20261104100000_restore_whitespace_line_separators.sql).
+describe("U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR", () => {
+  it("are trimmed at the start and end", () => {
+    expect(trimText("\u2028Acme\u2029")).toBe("Acme");
+    expect(trimText("\u2029Acme\u2028")).toBe("Acme");
+  });
+
+  it("make a value of only them empty", () => {
+    expect(trimText("\u2028")).toBe("");
+    expect(trimText("\u2029")).toBe("");
+    expect(trimText("\u2028\u2029")).toBe("");
+  });
+
+  it("are kept inside a value and detected as whitespace", () => {
+    expect(trimText("A\u2028B")).toBe("A\u2028B");
+    expect(hasWhitespace("a\u2028b")).toBe(true);
+    expect(hasWhitespace("a\u2029b")).toBe(true);
+  });
+
+  it("do not make U+200B (zero width space) whitespace", () => {
+    expect(trimText("\u200bAcme\u200b")).toBe("\u200bAcme\u200b");
+    expect(hasWhitespace("a\u200bb")).toBe(false);
+  });
+});
+
 describe("charLength (Unicode code points)", () => {
   it("counts ASCII", () => {
     expect(charLength("")).toBe(0);

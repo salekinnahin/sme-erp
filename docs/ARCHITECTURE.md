@@ -60,6 +60,11 @@ app/
   vendors/                   Vendor list, new, [id] detail, [id]/edit (same structure as customers)
   products/                  Product list, new, [id] detail, [id]/edit (same structure), plus
                              categories/ (minimal category list: add, rename, deactivate)
+  quotations/                Quotation list, new, [id] detail, [id]/edit (drafts only),
+                             [id]/print (browser print view)
+    actions.ts               Server Actions: create, update draft, set status
+    _components/             Line-item form with preview, status buttons, status badge,
+                             print button
   dashboard/page.tsx         Authenticated landing page (requires an organization)
   dashboard/error.tsx        Error boundary: retryable "couldn't load organization" message
   onboarding/error.tsx       Same error boundary for onboarding
@@ -71,18 +76,31 @@ lib/
     proxy.ts                 Session refresh helpers used by proxy.ts
   auth/errors.ts             Maps Supabase auth errors to safe user-facing messages
   tenancy/context.ts         getUser / requireUser / getTenant / requireTenant
-  organizations/             Organization validation + createOrganization()
+  organizations/             Organization validation, createOrganization(),
+                             getOrganizationDetails() (letterhead)
   customers/                 validation.ts, permissions.ts, customers.ts (domain functions)
   vendors/                   validation.ts, permissions.ts, vendors.ts (domain functions)
   products/                  validation.ts, permissions.ts, errors.ts, products.ts,
                              categories.ts (domain functions)
+  quotations/                validation.ts (input, dates, status transitions, RPC payload),
+                             calculations.ts (exact line/total math), permissions.ts,
+                             errors.ts, quotations.ts (domain functions), options.ts
+                             (customer/product choices incl. current references),
+                             form.ts (form values, payload parsing, preview; client-safe),
+                             status-actions.ts, messages.ts (safe failure messages)
+  sales-orders/              validation.ts (input, dates, line IDs, statuses, conversion,
+                             RPC payloads; line rules reused from quotations),
+                             calculations.ts (re-exports the quotation math), permissions.ts,
+                             errors.ts, sales-orders.ts (domain functions). No UI yet
   validation/fields.ts       Shared field rules (email, phone, UUID, optional text)
+  validation/decimal.ts      Decimal-string parsing and BigInt scaled arithmetic (no floats)
   validation/text.ts         Whitespace set and code-point length, matching SQL
-  format.ts                  Date formatting in the organization's time zone; money and
+  format.ts                  Timestamps in the organization's time zone, calendar dates
+                             (formatCalendarDate, for `date` columns); money and
                              quantity formatting on decimal strings (no floats)
 supabase/
   migrations/                SQL migrations
-  tests/                     SQL tests (tenant isolation, customers, vendors, products), run in the SQL Editor
+  tests/                     SQL tests (tenant isolation, customers, vendors, products, quotations, sales orders), run in the SQL Editor
 lib/**/*.test.ts             Vitest unit tests, next to the code they test
 proxy.ts                     Session refresh + optimistic route protection
 ```
@@ -101,16 +119,43 @@ Master-data modules follow the customers module. See DECISIONS 013. Vendors (`li
 | Migration | Table with `organization_id`, CHECK constraints, indexes, RLS on `is_org_member()`, column-level INSERT/UPDATE privileges, no DELETE |
 | Role-restricted change | `SECURITY DEFINER` function (`set_customer_status`). It finds the row only through the caller's active membership and role. Authorize before locking: no `SELECT … FOR UPDATE` on rows the caller may not access |
 | Search and list | `SECURITY INVOKER` SQL function (`list_customers`), so RLS still applies and user input never becomes a PostgREST filter string |
-| Validation | `lib/<domain>/validation.ts`, using `lib/validation/fields.ts` and `lib/validation/text.ts` (shared whitespace set and code-point lengths, DECISIONS 014). Mirrors the CHECK constraints, which use `text_is_trimmed()` / `text_has_whitespace()` |
+| Validation | `lib/<domain>/validation.ts`, using `lib/validation/fields.ts` and `lib/validation/text.ts` (shared whitespace set and code-point lengths, DECISIONS 014). Mirrors the CHECK constraints, which use `text_is_trimmed()` / `text_has_whitespace()`. Write invisible or line-breaking characters as escapes, never literally (DECISIONS 019) |
 | Permissions | `lib/<domain>/permissions.ts`, with a role → action table |
 | Domain functions | `lib/<domain>/<domain>.ts`. They take the tenant from `requireTenant()`. Reads throw on error; writes return `{ ok, reason }` |
 | Server Actions | `app/<domain>/actions.ts`. They call `requireTenant()`, validate, call the domain function, and map reasons to safe messages |
 | Pages | Request-time data inside `<Suspense>`, `notFound()` for missing or other-tenant IDs, `error.tsx` built on `TenantLoadError` |
 
+## Transaction Document Pattern (quotations)
+
+Transaction documents differ from master data: a header and items change together, totals must not be forgeable, master data is snapshotted, and the document becomes immutable after its first status change. Quotations (`lib/quotations/`, migration `20261104090000_quotations.sql`) set the pattern for sales orders and invoices. See DECISIONS 017 and 018.
+
+| Layer | Quotations |
+| --- | --- |
+| Tables | Header + items, composite `(organization_id, …)` FKs to customers, products and the header. Snapshot columns for customer and product data. Totals and line amounts stored, with CHECKs that keep each line consistent |
+| Privileges | `SELECT` only (RLS on `is_org_member()`). No INSERT/UPDATE/DELETE for any API role |
+| Writes | `SECURITY DEFINER` functions (`create_quotation`, `update_quotation_draft`, `set_quotation_status`). They derive the organization, creator, number, snapshots and amounts, and take items as a JSON array in one call, so one transaction covers everything |
+| Numbering | `next_document_number()` over `document_number_counters` (row lock, transactional, per organization) |
+| Document rules | Triggers: identity columns frozen, status transitions checked, nothing but status changes after draft, items only writable while draft. They apply to every writer |
+| Calculations | SQL `numeric` is authoritative. `lib/quotations/calculations.ts` mirrors it with BigInt on decimal strings for previews and early errors |
+| Validation / permissions | `validation.ts` (fields, dates, items, status table, RPC payload), `permissions.ts` (role → action, role + transition) |
+| Reads | One document = one statement: `get_quotation()` (`SECURITY INVOKER`, RLS applies) returns header + items as JSON with money as text. Never read header and items with separate requests (DECISIONS 020) |
+| Domain functions | `quotations.ts`: pre-check customer and products against the tenant for per-field errors, then call the RPC. `getQuotation()` makes a single `get_quotation` call |
+| List | `list_quotations()` (`SECURITY INVOKER`), like the master-data lists. Search uses snapshot columns |
+| Form | One client form for create and edit. Lines are sent as one JSON field read by an allowlist (`parseFormItems()`); snapshots and amounts are never sent. The preview reuses `validateQuotationItem()` and `calculations.ts`. Customer/product choices are a small server-side search (Server Actions → `option-search.ts` → `options.ts`, reusing `list_customers()` / `list_products()`, active only, 25 per search) plus the current references fetched by ID within the tenant whatever their status (`options.ts`). `app/_components/option-search.tsx` is a dependency-free combobox, shared with sales orders |
+| Print | `[id]/print` page with Tailwind `print:` variants and `@media print` in `globals.css`. Browser Print → Save as PDF; no PDF library |
+
+Sales orders (`lib/sales-orders/`, migration `20261104130000_sales_orders.sql`, DECISIONS 022) follow the same pattern for the database, domain, validation and UI layers (Part 2: `app/sales-orders/`, `list_sales_orders()` in `20261104140000_list_sales_orders.sql`). The UI reuses the shared selector and print button (`app/_components/`), the quotation selector search, preview engine (`previewLines()`) and payload parser. Differences:
+
+- A second create path, `create_sales_order_from_quotation()`, copies an accepted quotation's snapshots and amounts instead of reading master data. It is limited to one order per quotation by `unique (organization_id, source_quotation_id)`.
+- Draft edits re-snapshot only what changes: the customer only if it changes, and lines only if they are not kept by `id` with the same product.
+- Calculations and line validation are imported from `lib/quotations/`, not copied.
+- The edit form keeps each existing line's ID (`lib/sales-orders/form.ts`): unchanged lines and lines with a changed product send their ID, new lines none, removed lines are omitted. Kept lines display the snapshot recorded on the order.
+- The accepted quotation's detail page shows **Create sales order** / **View sales order** from one tenant-filtered lookup (`getSalesOrderForQuotation()`); the conversion itself is only the database function.
+
 ## Request and Auth Flow
 
 1. `proxy.ts` runs on every non-static request. It calls `updateSession()`, which refreshes the Supabase session cookies and returns the user.
-2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding`, `/customers`, `/vendors` and `/products`, and authenticated users are sent away from the login and sign-up pages.
+2. The proxy redirects **optimistically only**. Unauthenticated users are sent away from `/dashboard`, `/onboarding`, `/customers`, `/vendors`, `/products`, `/quotations` and `/sales-orders`, and authenticated users are sent away from the login and sign-up pages.
 3. Every protected page, Server Action and Route Handler must re-check the user server-side. Use `requireUser()` or `requireTenant()` from `lib/tenancy/context.ts` (built on `supabase.auth.getUser()`). Never rely on `getSession()` or on client state for authorization.
 4. Organization routing happens in pages, not the proxy. `requireTenant()` sends users with no active membership to `/onboarding/organization`, and the onboarding page sends members to `/dashboard`. If the membership lookup fails, it throws. The segment's `error.tsx` then shows a generic message with a Retry button. It never redirects and never shows tenant data.
 5. Supabase clients are created per request. Never share one across requests.
@@ -127,6 +172,6 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 ## Not Yet Implemented
 
 - Invitations, member management, role changes
-- ERP domain tables other than `customers`, `vendors`, `products` and `product_categories` (no stock, documents or payments yet)
+- ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders` and `sales_order_items` (no stock, invoices or payments yet; no sales order UI yet)
 - Supabase Storage usage
 - Automated UI / end-to-end tests

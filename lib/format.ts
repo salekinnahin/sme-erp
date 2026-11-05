@@ -6,6 +6,19 @@ export function formatDate(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+/**
+ * Formats a calendar date ("YYYY-MM-DD", a PostgreSQL `date`) such as a
+ * quotation date. A date has no time zone, so it is formatted in UTC: using
+ * formatDate() would read it as UTC midnight and show the previous day in
+ * time zones west of UTC.
+ */
+export function formatCalendarDate(ymd: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  }).format(new Date(`${ymd}T00:00:00Z`));
+}
+
 /** Formats an ISO timestamp as date and time in the organization's time zone. */
 export function formatDateTime(iso: string, timeZone: string): string {
   return new Intl.DateTimeFormat("en-GB", {
