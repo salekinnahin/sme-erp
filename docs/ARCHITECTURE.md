@@ -192,3 +192,15 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 - ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders`, `sales_order_items`, `invoices` and `invoice_items` (no stock or payments yet)
 - Supabase Storage usage
 - Automated UI / end-to-end tests
+
+## Organization Feature Entitlements
+
+`organization_features` is a small platform capability (DECISIONS 025), initially supporting only `rentals`. It has no module UI, routes or management Server Actions. `lib/organizations/feature-keys.ts` provides the client-safe key type and exact runtime allowlist; `lib/organizations/features.ts` is marked `server-only`.
+
+Use `await hasOrganizationFeature("rentals")` from server navigation, routes or actions. It resolves `getTenant()` through the verified Auth session, takes no organization argument, and calls `has_org_feature()` with the session organization. Only a literal boolean true without an RPC error grants access. Missing session/membership, invalid keys, errors and exceptions return false. No persistent feature cache is introduced; database checks re-evaluate active membership even if the request's tenant context was loaded earlier. Request data should render inside the existing Suspense boundaries.
+
+The SQL helper is STABLE, SECURITY INVOKER with an empty search path: it needs no elevated privileges because its read can use the member SELECT policy. It checks active membership explicitly and reads only organization ID, key and enabled state under RLS. Missing, disabled, unknown, null and inaccessible inputs return false for authenticated callers. Anonymous callers cannot execute it.
+
+Future modules must enforce **entitlement AND required organization role**: hide navigation/routes when disabled, check the server entry point, and enforce entitlement and permissions inside database RPCs/RLS. For SECURITY DEFINER module writes, explicitly call `has_org_feature()` using the authorized organization and caller JWT; do not rely on invoker RLS alone when the outer function is privileged. The final database mutation must enforce entitlement, since an earlier UI/server read can become stale. No Rental navigation or placeholder is added now.
+
+Migration order: apply the existing migrations through `20261104150000_invoices.sql`, then `20261104160000_list_invoices.sql`, then `20261104170000_organization_features.sql`. The new migration directly depends on the initial organizations/membership migration (`organizations`, `is_org_member`, `set_updated_at`), and changes no invoice behavior. There are no new package dependencies.

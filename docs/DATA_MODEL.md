@@ -391,3 +391,15 @@ Cancelling a document uses a status change and, where relevant, reversing moveme
 ### Invoice list read (Part 2)
 
 `list_invoices(organization_id, search, status, customer_id, limit, offset)` follows the sales order list: STABLE, SECURITY INVOKER, empty search path, authenticated only. RLS and an explicit organization predicate both apply. Searches use invoice number/customer snapshot name, with Unicode trimming and literal LIKE wildcards. Status/customer filters combine; limit is clamped to 1–100, offset to at least zero. Rows sort by `created_at desc, id desc`, include `total_count` before pagination, source sales order ID/number, and exact text for `grand_total`, `amount_paid`, `amount_due`. No Part 1 tables, constraints or write rules change (DECISIONS 024).
+
+## Organization Feature Entitlements (implemented)
+
+Migration: `20261104170000_organization_features.sql` (DECISIONS 025).
+
+`organization_features` stores UUID `id` (generated primary key), non-null `organization_id` referencing `organizations(id)` with ON DELETE CASCADE, non-null text `feature_key`, non-null boolean `enabled` default false, nullable `enabled_at` and `enabled_by`, and non-null `created_at` / `updated_at` timestamps default now. The shared update trigger maintains `updated_at`. `enabled_by` references `auth.users(id)` ON DELETE SET NULL and is indexed. Trusted tooling supplies last-activation metadata; disabling retains it. Database-only operators may leave the actor null because there is no platform-admin identity model yet. These fields are operational metadata, not an append-only audit history.
+
+A named CHECK `organization_features_feature_key_check` allows only `rentals`. Add keys later through a new migration replacing that CHECK, alongside the TypeScript allowlist/type and tests; do not edit this migration after application. Unknown keys cannot be stored, and unknown helper inputs return false.
+
+Unique `(organization_id, feature_key)` gives one entitlement per feature and indexes organization reads. Unique `(organization_id, id)` supports tenant-safe composite foreign keys from future tenant-owned tables. The link to the root organization itself uses its primary key, as existing tenant tables do; no redundant composite root relationship is needed.
+
+No row, or `enabled = false`, means disabled. Nothing is seeded or enabled for existing or newly created organizations. Authenticated active members can SELECT only `organization_id`, `feature_key`, `enabled` of their own organizations. Activation actor/timestamps and record metadata are platform-only. There are no organization-user write grants or write policies. `has_org_feature(uuid, text)` returns a boolean under invoker RLS and active membership, never another organization's configuration.

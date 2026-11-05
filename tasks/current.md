@@ -1,5 +1,28 @@
 # Current Task
 
+## Organization Feature Entitlements
+
+Implemented the platform foundation only (DECISIONS 025). Initial approved key: `rentals`. No Rental module, navigation, admin UI, billing, or new dependencies.
+
+- Migration `20261104170000_organization_features.sql`, after invoice migrations `20261104150000` and `20261104160000`.
+- Member read-only RLS and minimal column grants; all company roles denied writes. Trusted database/platform tooling controls activation.
+- Invoker SQL helper and server-only `hasOrganizationFeature("rentals")`, with session tenant and fail-closed results; shared key type/runtime allowlist.
+- SQL suite `supabase/tests/organization_features.sql` plus focused Vitest tests.
+- Documentation covers entitlement versus roles, trusted writes and future UI + server + database enforcement.
+
+### Verification (local only)
+
+- [x] `npm test`: 701 passed across 44 files (15 focused entitlement checks)
+- [x] `npm run lint`
+- [x] `npx tsc --noEmit`
+- [x] All 18 migrations applied and all eight SQL suites passed in local PGlite with simulated Supabase Auth/API roles/default grants: tenant isolation, customers, vendors, products, quotations, sales orders, invoices, organization features
+- [ ] `npm run build`: blocked by existing Turbopack worker port binding failure (`Operation not permitted`), reproduced in sandbox and escalated run
+- [ ] Native local Supabase/PostgREST integration remains unverified; PGlite tests execute PostgreSQL constraints, grants and RLS with a minimal Auth bootstrap
+- No remote Supabase access, commit or push performed. No product decisions require input.
+
+## Previous task and outstanding manual checks
+
+
 ## Task
 
 Invoice Management — **Part 2 implemented; hosted/browser checks and production build open**. Invoice list, direct creation, detail, draft edit, confirmed sales order conversion, issue/cancel, print and navigation on the completed Part 1 foundation.

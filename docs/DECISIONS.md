@@ -380,3 +380,21 @@ Status: accepted
 **Consequences:** Browser Print → Save as PDF is the export path, with snapshot document content and current organization letterhead. No PDF dependency, payments, accounting, credits or stock effects are introduced. As on the quotation/sales-order lists, the list-page customer dropdown remains capped at 500 plus its current reference; create/edit customer/product searches have no 500-record cap.
 
 **Part 2 review fixes (2026-11-06):** A saved draft line whose selected product differs from its loaded snapshot offers **Restore recorded product**. Restoration uses only that line's recorded product ID, name, SKU, unit, description and unit price, preserving its reference token, quantity, discount and tax rate. This also works for an inactive recorded product; normal product searches remain active-only. Invoice list source numbers link to the sales order only when both the recorded number and the RPC's tenant-filtered source ID exist. Historical labels and Part 1 rules remain unchanged.
+
+## 025 — Organization Feature Entitlements
+
+Date: 2026-11-06
+Status: accepted
+
+**Context:** Optional modules need platform-controlled organization eligibility separate from company roles. No platform-admin identity or console exists yet.
+
+**Decision:** Add `organization_features` in `20261104170000_organization_features.sql`, with a controlled text CHECK initially allowing only `rentals`, unique organization/key, UUID identity, enabled default false and last-activation/timestamp metadata. Missing row means disabled. No Rental tables, routes, navigation, placeholder UI, billing or subscriptions are implemented. Add future keys through a new CHECK migration and the shared TypeScript allowlist/type together.
+
+- Features are organization-level entitlements; owner/manager/employee cannot manage them. Entitlement answers “Is this organization allowed to use this module?” Role permission answers “Is this user allowed to perform this action inside the module?” Future Rental access requires both entitlement and required organization role.
+- Active members read only their organizations' ID/key/enabled columns through RLS. All API writes are revoked, with no write policies and no privileged management RPC. Platform metadata is not exposed to members.
+- `has_org_feature(uuid, text)` is STABLE SQL, SECURITY INVOKER with fixed empty search path. Least privilege suffices: member SELECT privileges and RLS already support this query. Explicit active membership ensures false for inaccessible organizations even when called from a privileged function with a user JWT. Missing/disabled/unknown/null inputs deny. Anonymous execution is revoked.
+- `hasOrganizationFeature(feature)` is server-only, takes only the shared `OrganizationFeatureKey`, derives the tenant from the verified session, calls the boolean RPC and grants only on exact true. Errors/exceptions deny; no cross-request entitlement cache or service credential exists.
+- Initial management uses trusted platform/database tooling. A future platform-admin console may manage these rows only after a separate secure platform identity and authorization path are designed. Activation metadata is provided by trusted tooling (actor may be null for database-only administration), retained when disabled, and is not a complete audit log.
+- Future modules enforce eligibility at UI/navigation, server/actions and database layers. Privileged module RPCs must explicitly check caller entitlement and role; earlier UI/server checks can be stale. No weak browser-accessible admin role is added.
+
+**Consequences:** Existing organizations stay disabled without backfills. The server helper is reusable for future navigation but introduces no menu item today. The root organization FK plus unique `(organization_id, id)` supports tenant-safe future composite references. Trusted database owners remain intentionally privileged. Feature revocation is checked at database statement time; stronger serialization against concurrent admin changes can be designed if a future module requires it. No new dependencies.

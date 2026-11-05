@@ -54,3 +54,28 @@
 
 - Record sensitive actions: financial documents, payments, stock adjustments, role changes, imports.
 - Audit log rows are append-only.
+
+## Platform-controlled Feature Entitlements
+
+Feature entitlement answers “Is this organization allowed to use this module?” Role permission answers “Is this user allowed to perform this action inside the module?” Future Rental authorization requires `organization has rentals feature AND user has required organization role`. Neither check replaces the other; UI hiding alone never authorizes an operation.
+
+`organization_features` has RLS on active membership. Authenticated owners, managers and employees can read only their own organization's `organization_id`, `feature_key`, `enabled`. They have no table or column INSERT/UPDATE grants, DELETE/TRUNCATE grants, or write policies. Anonymous users have no table access or helper execution. Disabling membership removes visibility and makes the helper return false. The invoker helper uses a fixed empty search path and returns only a boolean.
+
+Initial entitlement enable/disable operations use trusted platform/database tooling (e.g. a privileged database operator), never the organization session. No management RPC, public Server Action, browser admin role, or service-role credential is introduced. A future platform-admin console must establish an independent, securely verified platform identity and trusted server write path; an organization owner is never a platform administrator.
+
+Example for a trusted database operator only (replace the organization UUID deliberately):
+
+```sql
+insert into public.organization_features (organization_id, feature_key, enabled, enabled_at, enabled_by)
+values ('<organization uuid>'::uuid, 'rentals', true, now(), null)
+on conflict (organization_id, feature_key) do update
+set enabled = true, enabled_at = now(), enabled_by = excluded.enabled_by;
+
+-- Disable without losing last-activation metadata.
+update public.organization_features set enabled = false
+where organization_id = '<organization uuid>'::uuid and feature_key = 'rentals';
+```
+
+If a verified platform actor has an Auth user ID, trusted tooling may record it in `enabled_by`; it is never derived from an organization user's request. Use tooling's operational logs for change accountability until an explicit audit/admin workflow exists. The database owner and existing trusted Supabase service administration can bypass RLS by design; their credentials remain outside browser and normal server actions.
+
+Future gated modules must check entitlements in UI/navigation, server actions/routes, and database tables/RPCs/RLS. A server check cannot replace the database mutation check. Errors deny access; callers can present a safe unavailable message and retry without granting access. No feature billing, plans, expiration, trials or per-user entitlements are introduced.
