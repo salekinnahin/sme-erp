@@ -270,6 +270,8 @@ Snapshot sources for `product_name`, `sku`, `unit` (and the default `unit_price`
 - conversion: the quotation line, copied with its quantity, price, discount, tax rate and amounts
 - a kept line on a draft (item `id` = an existing line of the same order, same product): that line
 
+Draft line IDs are not durable. An item `id` sent to `update_sales_order_draft()` only identifies the previously recorded line for that save. `sales_order_replace_items()` deletes and re-inserts a draft's items, so row IDs may change after each draft save. Nothing should reference a draft line by ID. After confirmation, items are immutable and their IDs are stable (DECISIONS 022).
+
 ### Sales order access rules
 
 - `authenticated` has `SELECT` only on `sales_orders` and `sales_order_items` (RLS `is_org_member`). No INSERT, UPDATE or DELETE privilege or policy. `anon` has nothing.

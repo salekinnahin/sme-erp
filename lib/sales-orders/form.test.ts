@@ -239,6 +239,90 @@ describe("edit form: line IDs", () => {
   });
 });
 
+describe("edit form: re-selecting the line's original product", () => {
+  // Line 2 recorded PRODUCT at 40.00 with no description; give it a recorded
+  // price of 100 and a description for these cases.
+  const recorded = (): SalesOrderFormValues =>
+    salesOrderToFormValues({
+      ...ORDER,
+      items: [
+        ORDER.items[0],
+        { ...ORDER.items[1], unitPrice: "100.00", description: "Recorded laptop desc", discountAmount: "0.00", lineTotal: "100.00" },
+      ],
+    });
+  // The product's current master data has moved on since the order was saved.
+  const current = product(PRODUCT, { name: "Laptop v2", sku: "LAP-2", unit: "set", sellingPrice: "150.00", description: "Current laptop desc" });
+  const other = product(NEW_PRODUCT, { sellingPrice: "7.25", description: "Other desc" });
+
+  it("REGRESSION: A → B → A restores the recorded price (100, not 150) and description", () => {
+    const values = recorded();
+    const toB = applyProductToSalesOrderLine(values.lines[1], other);
+    expect(toB).toMatchObject({ productId: NEW_PRODUCT, unitPrice: "7.25", description: "Other desc" });
+    const backToA = applyProductToSalesOrderLine(toB, current);
+    expect(backToA).toMatchObject({
+      lineId: LINE_2,
+      productId: PRODUCT,
+      unitPrice: "100.00",
+      description: "Recorded laptop desc",
+      quantity: "1",
+    });
+    expect(isKeptLine(backToA)).toBe(true);
+    // Name, SKU and unit come from the recorded snapshot, not master data.
+    expect(lineProduct(backToA, new Map([[PRODUCT, current]]))).toMatchObject({
+      name: "Laptop",
+      sku: "LAP-1",
+      unit: "pcs",
+      sellingPrice: "100.00",
+      description: "Recorded laptop desc",
+    });
+    values.lines[1] = backToA;
+    expect(submit(values).p_items[1]).toMatchObject({
+      id: LINE_2,
+      product_id: PRODUCT,
+      unit_price: "100.00",
+      description: "Recorded laptop desc",
+    });
+  });
+
+  it("restores a recorded empty description, not the product's current one", () => {
+    const values = salesOrderToFormValues(ORDER); // line 2 recorded no description
+    const back = applyProductToSalesOrderLine(applyProductToSalesOrderLine(values.lines[1], other), current);
+    expect(back).toMatchObject({ unitPrice: "40.00", description: "" });
+  });
+
+  it("a genuinely different product still uses its current values", () => {
+    const changed = applyProductToSalesOrderLine(recorded().lines[1], other);
+    expect(changed).toMatchObject({ lineId: LINE_2, productId: NEW_PRODUCT, unitPrice: "7.25", description: "Other desc" });
+    expect(isKeptLine(changed)).toBe(false);
+  });
+
+  it("a new line choosing the same product uses its current values", () => {
+    const line = applyProductToSalesOrderLine(emptySalesOrderLine("new-1"), current);
+    expect(line).toMatchObject({ lineId: "", productId: PRODUCT, unitPrice: "150.00", description: "Current laptop desc" });
+  });
+
+  it("unrelated edits keep the recorded values", () => {
+    const values = recorded();
+    values.lines[1] = { ...values.lines[1], quantity: "4", taxRate: "5" };
+    values.notes = "Changed";
+    expect(submit(values).p_items[1]).toMatchObject({
+      id: LINE_2,
+      product_id: PRODUCT,
+      quantity: "4",
+      unit_price: "100.00",
+      tax_rate: "5",
+      description: "Recorded laptop desc",
+    });
+  });
+
+  it("the line ID is still sent unchanged through every product change", () => {
+    const values = recorded();
+    const viaB = applyProductToSalesOrderLine(applyProductToSalesOrderLine(values.lines[1], other), current);
+    values.lines[1] = viaB;
+    expect(submit(values).p_items.map((i) => i.id)).toEqual([LINE_1, LINE_2]);
+  });
+});
+
 describe("edit form: current references", () => {
   it("shows a kept line's recorded snapshot, not the product's current master data", () => {
     const [line] = salesOrderToFormValues(ORDER).lines;

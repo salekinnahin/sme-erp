@@ -149,7 +149,7 @@ Sales orders (`lib/sales-orders/`, migration `20261104130000_sales_orders.sql`, 
 - A second create path, `create_sales_order_from_quotation()`, copies an accepted quotation's snapshots and amounts instead of reading master data. It is limited to one order per quotation by `unique (organization_id, source_quotation_id)`.
 - Draft edits re-snapshot only what changes: the customer only if it changes, and lines only if they are not kept by `id` with the same product.
 - Calculations and line validation are imported from `lib/quotations/`, not copied.
-- The edit form keeps each existing line's ID (`lib/sales-orders/form.ts`): unchanged lines and lines with a changed product send their ID, new lines none, removed lines are omitted. Kept lines display the snapshot recorded on the order.
+- The edit form keeps each existing line's ID (`lib/sales-orders/form.ts`): unchanged lines and lines with a changed product send their ID, new lines none, removed lines are omitted. The ID is an edit/reference token for that save only; draft items are re-inserted on save, so row IDs are not durable until confirmation (DECISIONS 022). Kept lines display the snapshot recorded on the order; re-selecting a line's original product restores its recorded description and price.
 - The accepted quotation's detail page shows **Create sales order** / **View sales order** from one tenant-filtered lookup (`getSalesOrderForQuotation()`); the conversion itself is only the database function.
 
 ## Request and Auth Flow

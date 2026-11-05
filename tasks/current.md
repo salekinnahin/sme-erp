@@ -8,7 +8,7 @@ Sales Order Management — **Part 2 (implemented, manual checks open)**: user-fa
 
 ## Scope
 
-- In: `/sales-orders` (list, search, status and customer filter, 25 per page), `/sales-orders/new`, `/sales-orders/[id]`, `/sales-orders/[id]/edit` (draft only, line IDs preserved), `/sales-orders/[id]/print`; **Create sales order / View sales order** on accepted quotations; status actions with stale-page handling; `list_sales_orders()` (migration `20261104140000_list_sales_orders.sql`); shared `OptionSearch` and `PrintButton` moved to `app/_components/`; Vitest; SQL tests appended to `supabase/tests/sales_orders.sql`; docs.
+- In: `/sales-orders` (list, search, status and customer filter, 25 per page), `/sales-orders/new`, `/sales-orders/[id]`, `/sales-orders/[id]/edit` (draft only, existing line IDs sent as edit/reference tokens), `/sales-orders/[id]/print`; **Create sales order / View sales order** on accepted quotations; status actions with stale-page handling; `list_sales_orders()` (migration `20261104140000_list_sales_orders.sql`); shared `OptionSearch` and `PrintButton` moved to `app/_components/`; Vitest; SQL tests appended to `supabase/tests/sales_orders.sql`; docs.
 - Out: invoices, payments, inventory reservation or deduction, delivery notes, fulfilment, email/WhatsApp, PDF library.
 
 ## Permissions (Version 1, unchanged)
@@ -21,7 +21,14 @@ Sales Order Management — **Part 2 (implemented, manual checks open)**: user-fa
 ## Acceptance Criteria
 
 - [x] Direct create and draft edit with searchable active-only selectors, exact preview, server-authoritative amounts
-- [x] Edit keeps existing line IDs (also with a changed product), new lines have none, removed lines are omitted; a notes-only edit of a draft with an inactive product succeeds (regression test)
+- [x] Edit sends each existing line's ID (also with a changed product), new lines have none, removed lines are omitted; a notes-only edit of a draft with an inactive product succeeds (regression test)
+- [x] Review cleanup: a draft line ID is an edit/reference token for the current save, not a durable ID. Draft items are deleted and re-inserted on save, so row IDs may change; nothing may reference a draft line by ID; confirmed items are immutable with stable IDs (DECISIONS 022, DATA_MODEL)
+- [x] Review cleanup: re-selecting a line's original product (A → B → A) restores its recorded snapshot, description and price instead of current master data (regression tests in `lib/sales-orders/form.test.ts`)
+
+## Backlog (from the Part 2 review, not fixed yet)
+
+- Rare stale-draft timing message
+- 500-customer cap on the list-page customer filter
 - [x] Conversion from an accepted quotation via `create_sales_order_from_quotation()`; already-converted and stale cases show friendly messages and the page refreshes
 - [x] Status buttons per role and status; stale actions show a message and the page refreshes
 - [x] Same not-found page for unknown, malformed and other-tenant IDs (detail, edit, print)

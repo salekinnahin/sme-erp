@@ -29,6 +29,13 @@ import type { SalesOrderItemRawInput } from "./validation";
  * snapshot (name, SKU, unit), even if the product is now inactive. With a
  * different product, the line is a new selection (active product, fresh
  * snapshot). The browser only ever sends IDs and user-entered values.
+ *
+ * A `lineId` is an edit/reference token for the current save only: it lets
+ * the database identify the previously recorded line. update_sales_order_draft()
+ * replaces the draft's items (delete + insert), so a line's row ID may change
+ * after every draft save. The edit form always reloads IDs from the saved
+ * draft. Nothing should reference a draft line by ID; once the order is
+ * confirmed its items are immutable and their IDs are stable.
  */
 
 /** What a loaded draft line recorded for its product. Display only. */
@@ -140,14 +147,26 @@ export function lineProduct(
 }
 
 /**
- * The line after choosing a product: description and unit price are
- * prefilled from it (quotation behavior). The line keeps its ID, so the
- * database sees "existing line, new product" and applies its rules.
+ * The line after choosing a product. The line keeps its ID either way, so
+ * the database sees "existing line" and applies its rules.
+ *
+ *   - Re-selecting the product the loaded line recorded (for example A → B →
+ *     A): description and unit price are restored from the line's recorded
+ *     values, not the product's current master data. Name, SKU and unit come
+ *     from the snapshot too (lineProduct()), so the line is kept as recorded.
+ *   - Any other product (or a new line): description and unit price are
+ *     prefilled from the product's current data (quotation behavior).
+ *
+ * Display and prefill only: the server and the database stay authoritative.
  */
 export function applyProductToSalesOrderLine(
   line: SalesOrderFormLine,
   product: ProductOption | undefined,
 ): SalesOrderFormLine {
+  const s = line.snapshot;
+  if (product && line.lineId !== "" && s && s.productId === product.id) {
+    return { ...line, productId: s.productId, description: s.description ?? "", unitPrice: s.unitPrice };
+  }
   return { ...line, ...applyProductToLine(line, product) };
 }
 
