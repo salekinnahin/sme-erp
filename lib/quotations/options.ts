@@ -92,7 +92,7 @@ function toProductOption(row: ProductRow): ProductOption {
 }
 
 /** Valid, distinct, lower-case IDs that are not already in the list. */
-function missingIds(ids: readonly (string | null | undefined)[], listed: { id: string }[] = []): string[] {
+export function missingIds(ids: readonly (string | null | undefined)[], listed: { id: string }[] = []): string[] {
   const have = new Set(listed.map((o) => o.id));
   return [
     ...new Set(
@@ -113,10 +113,10 @@ export function normalizeOptionSearch(raw: unknown): string {
   return trimText(truncateChars(raw, OPTION_SEARCH_MAX_LENGTH));
 }
 
-type CountedRow = { total_count: number | string };
+export type CountedRow = { total_count: number | string };
 
 /** total_count is a bigint; PostgREST may send it as a string. */
-function hasMore(rows: CountedRow[]): boolean {
+export function hasMore(rows: CountedRow[]): boolean {
   return rows.length > 0 && Number(rows[0].total_count) > rows.length;
 }
 

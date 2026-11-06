@@ -84,9 +84,9 @@ begin
  for f in select p.*,l.lanname from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang
    where n.nspname='public' and (p.proname like '%purchase_order%' ) loop
   if not (f.proconfig @> array['search_path=""']) then raise exception 'FAIL: search path %',f.proname; end if;
-  if f.proname in ('create_purchase_order','update_purchase_order_draft','set_purchase_order_status','get_purchase_order') then
+  if f.proname in ('create_purchase_order','update_purchase_order_draft','set_purchase_order_status','get_purchase_order','list_purchase_orders') then
    if not has_function_privilege('authenticated',f.oid,'EXECUTE') or has_function_privilege('anon',f.oid,'EXECUTE') then raise exception 'FAIL: RPC grants'; end if;
-   if f.proname='get_purchase_order' then
+   if f.proname in ('get_purchase_order','list_purchase_orders') then
     if f.prosecdef or f.provolatile <> 's' or f.lanname <> 'sql' then raise exception 'FAIL: read definition'; end if;
    elsif not f.prosecdef then raise exception 'FAIL: write definition'; end if;
   elsif has_function_privilege('authenticated',f.oid,'EXECUTE') or has_function_privilege('anon',f.oid,'EXECUTE') then
@@ -398,6 +398,132 @@ select pg_temp.expect_error('select public.create_purchase_order(null,current_da
 select pg_temp.expect_error('select public.update_purchase_order_draft(null,null,current_date,null,null,''[]'')','42501');
 select pg_temp.expect_error('select public.set_purchase_order_status(null,''ordered'')','42501');
 select pg_temp.expect_error('select public.get_purchase_order(null,null)','42501');
+select pg_temp.expect_error(format('select public.list_purchase_orders(%L)',current_setting('test.po_org_a')),'42501');
+reset role;
+
+-- -----------------------------------------------------------------------------
+-- Part 2 list RPC: definition, snapshots, search, filters, pagination, RLS.
+-- -----------------------------------------------------------------------------
+do $$
+declare v_fn text := 'public.list_purchase_orders(uuid, text, text, uuid, integer, integer)';
+begin
+ if not exists (select 1 from pg_proc p join pg_language l on l.oid=p.prolang
+   where p.oid=v_fn::regprocedure and not p.prosecdef and p.provolatile='s' and l.lanname='sql'
+     and p.proconfig @> array['search_path=""'])
+  or has_function_privilege('anon',v_fn,'execute') or not has_function_privilege('authenticated',v_fn,'execute') then
+  raise exception 'FAIL: purchase order list definition/grants';
+ end if;
+end $$;
+do $$ declare v uuid; begin
+ insert into public.vendors (organization_id,name,company_name)
+ values (current_setting('test.po_org_a')::uuid,'Wild 100% Under_score','Bulk Traders Ltd') returning id into v;
+ perform set_config('test.po_vendor_wild',v::text,true);
+end $$;
+set local role authenticated;
+select set_config('request.jwt.claims','{"sub":"a8000000-0000-4000-8000-000000000001","role":"authenticated"}',true);
+do $$
+declare
+ v_org uuid:=current_setting('test.po_org_a')::uuid; v_vendor uuid:=current_setting('test.po_vendor_wild')::uuid;
+ v_po uuid; v_po2 uuid; v_expected uuid[]; v_ids uuid[]; v_page1 uuid[]; v_page2 uuid[]; v_count bigint; v_status text; v_row record;
+begin
+ v_po:=public.create_purchase_order(v_vendor,date '2026-11-06',date '2026-11-20',null,
+  jsonb_build_array(jsonb_build_object('product_id',current_setting('test.po_noninventory'),'quantity','1','unit_price','9999999999999999.99')));
+ v_po2:=pg_temp.po_create(v_vendor,pg_temp.po_items(current_setting('test.po_noninventory')::uuid));
+ perform public.set_purchase_order_status(v_po2,'ordered');
+
+ select array_agg(id order by created_at desc, id desc) into v_expected from public.purchase_orders where organization_id=v_org;
+ select array_agg(l.id order by l.ordinality), max(l.total_count) into v_ids, v_count
+ from public.list_purchase_orders(v_org,null,null,null,100,0) with ordinality as l;
+ if v_ids is distinct from v_expected or v_count <> cardinality(v_expected) or v_count < 11 then
+  raise exception 'FAIL: purchase order list ordering/count';
+ end if;
+
+ select * into v_row from public.list_purchase_orders(v_org,'under_score','draft');
+ if v_row.id is distinct from v_po or v_row.vendor_name <> 'Wild 100% Under_score' or v_row.vendor_company_name <> 'Bulk Traders Ltd'
+  or v_row.vendor_id <> v_vendor or v_row.order_date <> date '2026-11-06' or v_row.expected_delivery_date <> date '2026-11-20'
+  or v_row.status <> 'draft' or v_row.grand_total <> '9999999999999999.99' or pg_typeof(v_row.grand_total)::text <> 'text' then
+  raise exception 'FAIL: purchase order list row %', row_to_json(v_row);
+ end if;
+ -- Literal wildcards; company snapshot; PO number; Unicode trim.
+ if (select array_agg(id order by id) from public.list_purchase_orders(v_org,'%')) is distinct from (select array_agg(x order by x) from unnest(array[v_po,v_po2]) x)
+  or (select array_agg(id order by id) from public.list_purchase_orders(v_org,'_')) is distinct from (select array_agg(x order by x) from unnest(array[v_po,v_po2]) x)
+  or exists (select 1 from public.list_purchase_orders(v_org,'\'))
+  or exists (select 1 from public.list_purchase_orders(v_org,'no such order'))
+  or (select count(*) from public.list_purchase_orders(v_org,'bulk TRADERS')) <> 2 then
+  raise exception 'FAIL: purchase order list literal/company search';
+ end if;
+ select purchase_order_number into v_status from public.purchase_orders where id=v_po;
+ if (select array_agg(id) from public.list_purchase_orders(v_org,chr(12288)||lower(v_status)||chr(8232))) is distinct from array[v_po]
+  or (select max(total_count) from public.list_purchase_orders(v_org,chr(8233))) <> v_count
+  or (select max(total_count) from public.list_purchase_orders(v_org,'')) <> v_count then
+  raise exception 'FAIL: purchase order list number search/Unicode trimming';
+ end if;
+ -- Vendor master renamed/deactivated earlier: list uses the snapshot only.
+ if exists (select 1 from public.list_purchase_orders(v_org,'Renamed supplier'))
+  or not exists (select 1 from public.list_purchase_orders(v_org,'Supplier a')) then
+  raise exception 'FAIL: purchase order list must search snapshots';
+ end if;
+ -- Strict status filter.
+ foreach v_status in array array['draft','ordered','partially_received','received','cancelled'] loop
+  if (select count(*) from public.list_purchase_orders(v_org,null,v_status,null,100)) <>
+     (select count(*) from public.purchase_orders where organization_id=v_org and status=v_status) then
+   raise exception 'FAIL: purchase order list status filter %',v_status;
+  end if;
+ end loop;
+ if exists (select 1 from public.list_purchase_orders(v_org,null,'bogus'))
+  or exists (select 1 from public.list_purchase_orders(v_org,null,'DRAFT'))
+  or exists (select 1 from public.list_purchase_orders(v_org,null,' draft')) then
+  raise exception 'FAIL: purchase order list status filter is not strict';
+ end if;
+ -- Vendor filter is tenant-safe and combines with status.
+ if (select array_agg(id) from public.list_purchase_orders(v_org,null,'ordered',v_vendor)) is distinct from array[v_po2]
+  or (select count(*) from public.list_purchase_orders(v_org,null,null,v_vendor)) <> 2
+  or exists (select 1 from public.list_purchase_orders(v_org,null,null,current_setting('test.po_vendor_b')::uuid))
+  or exists (select 1 from public.list_purchase_orders(v_org,null,null,gen_random_uuid())) then
+  raise exception 'FAIL: purchase order list vendor filter';
+ end if;
+ -- Pagination and clamping.
+ select array_agg(l.id order by l.ordinality) into v_page1 from public.list_purchase_orders(v_org,null,null,null,5,0) with ordinality l;
+ select array_agg(l.id order by l.ordinality) into v_page2 from public.list_purchase_orders(v_org,null,null,null,5,5) with ordinality l;
+ if v_page1 || v_page2 is distinct from v_expected[1:10]
+  or (select max(total_count) from public.list_purchase_orders(v_org,null,null,null,5,5)) <> v_count
+  or (select count(*) from public.list_purchase_orders(v_org,null,null,null,0,0)) <> 1
+  or (select count(*) from public.list_purchase_orders(v_org,null,null,null,null,0)) <> least(25,v_count)
+  or (select count(*) from public.list_purchase_orders(v_org,null,null,null,1000,0)) <> least(100,v_count)
+  or (select array_agg(l.id order by l.ordinality) from public.list_purchase_orders(v_org,null,null,null,5,-1) with ordinality l) is distinct from v_page1
+  or exists (select 1 from public.list_purchase_orders(v_org,null,null,null,25,100000)) then
+  raise exception 'FAIL: purchase order list pagination/clamping';
+ end if;
+ if exists (select 1 from public.list_purchase_orders(current_setting('test.po_org_b')::uuid))
+  or exists (select 1 from public.list_purchase_orders(null)) then
+  raise exception 'FAIL: purchase order list organization filter widened access';
+ end if;
+end $$;
+-- Employee: same list. Tenant B: only its own. Disabled members: nothing.
+select set_config('request.jwt.claims','{"sub":"a8000000-0000-4000-8000-000000000003","role":"authenticated"}',true);
+do $$ begin
+ if (select max(total_count) from public.list_purchase_orders(current_setting('test.po_org_a')::uuid))
+   is distinct from (select count(*) from public.purchase_orders where organization_id=current_setting('test.po_org_a')::uuid) then
+  raise exception 'FAIL: employee purchase order list';
+ end if;
+end $$;
+select set_config('request.jwt.claims','{"sub":"a8000000-0000-4000-8000-000000000005","role":"authenticated"}',true);
+do $$ begin
+ if exists (select 1 from public.list_purchase_orders(current_setting('test.po_org_a')::uuid))
+  or exists (select 1 from public.list_purchase_orders(current_setting('test.po_org_a')::uuid,'PO','draft'))
+  or exists (select 1 from public.list_purchase_orders(current_setting('test.po_org_b')::uuid,null,null,current_setting('test.po_vendor_a')::uuid))
+  or (select array_agg(purchase_order_number) from public.list_purchase_orders(current_setting('test.po_org_b')::uuid)) is distinct from array['PO-000001'] then
+  raise exception 'FAIL: tenant B purchase order list isolation';
+ end if;
+end $$;
+do $$ declare u uuid; begin
+ foreach u in array array['a8000000-0000-4000-8000-000000000004'::uuid,'a8000000-0000-4000-8000-000000000002'::uuid] loop
+  perform set_config('request.jwt.claims',jsonb_build_object('sub',u,'role','authenticated')::text,true);
+  if exists (select 1 from public.list_purchase_orders(current_setting('test.po_org_a')::uuid)) then
+   raise exception 'FAIL: disabled member listed purchase orders';
+  end if;
+ end loop;
+end $$;
 reset role;
 select 'ALL PURCHASE ORDER CHECKS PASSED' as result;
 rollback;

@@ -96,7 +96,7 @@ export function customerOptionLabel(c: CustomerOption): string {
   return c.status === "inactive" ? `${base} (inactive)` : base;
 }
 
-export function productOptionLabel(p: ProductOption): string {
+export function productOptionLabel(p: Pick<ProductOption, "name" | "sku" | "status">): string {
   const base = `${p.name} (${p.sku})`;
   return p.status === "inactive" ? `${base} (inactive)` : base;
 }
@@ -304,9 +304,26 @@ export function previewLines<L extends QuotationFormLine>(
   lines: readonly L[],
   productFor: (line: L) => ProductOption | undefined,
 ): QuotationPreview {
-  const amounts = lines.map((line): LineAmounts | null => {
+  return previewLinesWithDefaultPrice(lines, (line) => {
     const product = productFor(line);
-    if (!product) return null;
+    return product ? product.sellingPrice : undefined;
+  });
+}
+
+/**
+ * The preview engine with the default unit price resolved per line:
+ * undefined = no product chosen (the line is incomplete), null = the product
+ * has no default price (a unit price must be entered), otherwise the decimal
+ * string the database would use for a blank unit price. Purchase orders use
+ * it with purchase prices.
+ */
+export function previewLinesWithDefaultPrice<L extends QuotationFormLine>(
+  lines: readonly L[],
+  defaultPriceFor: (line: L) => string | null | undefined,
+): QuotationPreview {
+  const amounts = lines.map((line): LineAmounts | null => {
+    const defaultPrice = defaultPriceFor(line);
+    if (defaultPrice === undefined) return null;
     const parsed = validateQuotationItem({
       productId: line.productId,
       quantity: line.quantity,
@@ -315,7 +332,7 @@ export function previewLines<L extends QuotationFormLine>(
       taxRate: line.taxRate,
     });
     if (!parsed.ok) return null;
-    const unitPrice = parsed.value.unitPrice ?? product.sellingPrice;
+    const unitPrice = parsed.value.unitPrice ?? defaultPrice;
     if (unitPrice === null) return null;
     const result = calculateLine({ ...parsed.value, unitPrice });
     return result.ok ? result.value : null;

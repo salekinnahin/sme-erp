@@ -1,4 +1,9 @@
 import { lineAmountErrors } from "@/lib/quotations/validation";
+import {
+  PURCHASE_ORDER_PAGE_SIZE,
+  toListPurchaseOrdersArgs,
+  type PurchaseOrderListParams,
+} from "./list-params";
 import { createClient } from "@/lib/supabase/server";
 import type { TenantContext } from "@/lib/tenancy/context";
 import { isUuid } from "@/lib/validation/fields";
@@ -354,4 +359,81 @@ export async function setPurchaseOrderStatus(
     console.error("setPurchaseOrderStatus threw", err);
     return { ok: false, reason: "failed" };
   }
+}
+
+// -----------------------------------------------------------------------------
+// List
+// -----------------------------------------------------------------------------
+
+export type PurchaseOrderListItem = Pick<
+  PurchaseOrder,
+  | "id"
+  | "purchaseOrderNumber"
+  | "vendorId"
+  | "vendorName"
+  | "vendorCompanyName"
+  | "orderDate"
+  | "expectedDeliveryDate"
+  | "status"
+  | "grandTotal"
+  | "createdAt"
+>;
+
+export type PurchaseOrderList = {
+  items: PurchaseOrderListItem[];
+  /** Matching rows across all pages. Null if the page is past the end. */
+  total: number | null;
+  page: number;
+  pageSize: number;
+};
+
+type PurchaseOrderListRow = {
+  id: string;
+  purchase_order_number: string;
+  vendor_id: string;
+  vendor_name: string;
+  vendor_company_name: string | null;
+  order_date: string;
+  expected_delivery_date: string | null;
+  status: PurchaseOrderStatus;
+  grand_total: string;
+  created_at: string;
+  total_count: number | string;
+};
+
+/**
+ * One page of the tenant's purchase orders (list_purchase_orders():
+ * SECURITY INVOKER, RLS and an explicit organization filter). Search and
+ * display use the vendor snapshot recorded on each order.
+ */
+export async function listPurchaseOrders(
+  tenant: Tenant,
+  params: PurchaseOrderListParams,
+): Promise<PurchaseOrderList> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc(
+    "list_purchase_orders",
+    toListPurchaseOrdersArgs(tenant.organization.id, params),
+  );
+  if (error) throw new Error("Failed to load purchase orders.", { cause: error });
+
+  const rows = (data ?? []) as PurchaseOrderListRow[];
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      purchaseOrderNumber: row.purchase_order_number,
+      vendorId: row.vendor_id,
+      vendorName: row.vendor_name,
+      vendorCompanyName: row.vendor_company_name,
+      orderDate: row.order_date,
+      expectedDeliveryDate: row.expected_delivery_date,
+      status: row.status,
+      grandTotal: row.grand_total,
+      createdAt: row.created_at,
+    })),
+    // total_count is a bigint; PostgREST may send it as a string.
+    total: rows.length ? Number(rows[0].total_count) : params.page === 1 ? 0 : null,
+    page: params.page,
+    pageSize: PURCHASE_ORDER_PAGE_SIZE,
+  };
 }

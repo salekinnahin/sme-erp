@@ -1,5 +1,25 @@
 # Current Task
 
+## Purchase Order Management – Part 2 (UI)
+
+Built the Purchase Order UI on the Part 1 backend (DECISIONS 026), reusing the invoice Part 2 patterns (DECISIONS 021, 024). No Goods Receiving, stock ledger/quantities/reservations, supplier bills/payments, returns, warehouses or landed cost.
+
+- Routes `/purchase-orders`, `/new`, `/[id]`, `/[id]/edit`, `/[id]/print`; nav link; `/purchase-orders` added to the proxy's signed-in prefixes. Pages use `requireTenant()`; not-found for unknown/cross-tenant IDs.
+- Vendor selector: server search via existing `list_vendors()` (active only, 25 per search, name/company/email/phone). Product selector: `list_products()` (name/SKU/category) re-read by ID with **purchase price** (never selling price). Shared stale-response-safe `OptionSearch`; Enter never submits. Current vendor/products shown from the PO snapshot, inactive labelled.
+- Lines: purchase-price default; missing purchase price leaves the price blank with a "Required" hint. Saved lines send their `id` (also after a product change), new lines none, removed lines omitted. A → B → A restores recorded name/SKU/description/unit/PO price; per-line "Restore recorded product" for any changed saved line (the only route back to an inactive original). Exact-decimal preview via a non-breaking `previewLinesWithDefaultPrice()` hook on the shared quotation engine.
+- Status actions: draft → Mark ordered (all roles) / Cancel (owner, manager); ordered → Cancel (owner, manager). No receiving actions, no Edit outside draft, no delete. Stale edit/status actions show safe messages and refresh the page.
+- Migration `20261104190000_list_purchase_orders.sql` (invoker, fixed search path, RLS + explicit org filter, literal wildcards, Unicode trim, strict status, tenant-safe vendor filter, clamped limit, deterministic order, authenticated-only grant). `purchase_orders.sql` extended (and its helper-grant allowlist now includes the list RPC).
+
+### Verification (local only)
+
+- [x] `npm test`: 838 passed, 56 files (137 purchase order tests across 12 files)
+- [x] `npm run lint`, `npx tsc --noEmit` (after `next typegen`)
+- [x] `npm run build`: succeeded
+- [x] All 20 migrations apply and all nine SQL suites pass on local PGlite with simulated Supabase Auth/API roles; list RPC assertions mutation-checked (escaping, strict status, company search)
+- [ ] Manual: apply **only** `20261104190000_list_purchase_orders.sql` after `20261104180000_purchase_orders.sql`; re-run `purchase_orders.sql` in the SQL Editor
+- [ ] Manual: signed-in browser scenarios in `docs/testing/tenant-isolation.md` § 9.1
+- No remote Supabase access, commit or push performed.
+
 ## Purchase Order Management – Part 1
 
 Implemented the secure Vendor → Purchase Order database/domain foundation (DECISIONS 026). No PO UI, Goods Receiving, inventory quantities/movements/reservations, supplier bills/payments or accounting.
