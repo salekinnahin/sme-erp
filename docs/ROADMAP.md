@@ -44,7 +44,8 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 
 - [x] Purchase orders — Part 1 database/domain foundation (DECISIONS 026): vendor/product snapshots, purchase-price defaults, exact totals, PO numbering, draft edits, order/cancel, receiving-status reservation, RLS and tests. No stock effects.
 - [x] Purchase orders — Part 2 UI: list (server-side search/status/vendor filter, 25/page), direct create, detail, draft edit with line tokens and A → B → A restore, order/cancel, browser print, navigation. Purchase-price defaults; no stock effects. Migration `20261104190000_list_purchase_orders.sql`. Manual Supabase/browser checks remain open: see `tasks/current.md`
-- [ ] Goods receiving
+- [x] Goods receiving — Part 1 backend/domain: immutable receipts, partial/multiple deliveries, exact remaining quantities, PO status automation, cancellation guard, type snapshots, GR numbering, tenant security and tests (DECISIONS 027; migration `20261104200000_goods_receipts.sql`). Native concurrency/build checks and legacy reconciliation remain documented in `tasks/current.md`.
+- [ ] Goods receiving — UI
 - [ ] Supplier bills
 - [ ] Supplier payments
 

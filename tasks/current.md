@@ -1,5 +1,37 @@
 # Current Task
 
+## Goods Receiving Part 1 — review fixes (2026-11-06)
+
+- User confirmed receiving migration is **not applied remotely**. Edited `20261104200000_goods_receipts.sql` directly; no older migrations modified. DECISIONS 028 records the design.
+- Sealed-only summary and private derived status helper; PO INSERT/UPDATE rejects receiving-state mismatches (GR009). AFTER seal reconciles PO status for privileged writers too; no recursion. Normal status RPC still forbids receiving targets.
+- Header insert locks PO and enforces receiving eligibility, historical type reconciliation and received_date >= order_date (GR007). No future-date restriction. Cheap request-only checks now precede the RPC lock, after authorization.
+- Statement-level BEFORE TRUNCATE blocks both receipt tables and both PO tables. Cancellation regression checks the exact receipt-specific error while PO remains ordered with an unsealed receipt, without disabling guards. Mutation-checking with only that trigger removed makes the regression fail at the intended assertion.
+- SQL covers first 70/100 + rejected 31 with unchanged receipt/items/counter/summary, existing 101-from-zero, direct status mismatch/valid states, privileged seal, date rules, partial/multiple receipts and immutable-table TRUNCATE. PO status fixtures now use real receiving events.
+- Verification: `npm test` **920 passed / 60 files**; lint and `npx tsc --noEmit` passed. All 21 migrations and ten SQL suites pass locally on PGlite with simulated Supabase Auth/API roles. `npm run build` fails in both normal and escalated runs at the existing Turbopack CSS worker port bind (`Operation not permitted`). Native local concurrent-session waits remain manual.
+- No Goods Receiving UI or Inventory added. No remote Supabase connection, commit or push.
+
+## Goods Receiving – Part 1 (backend/domain)
+
+Implemented immutable PO → Goods Receipt events. No receiving UI, inventory ledger, product stock quantity, warehouses, supplier bills/payments, returns/reversal or rental functionality.
+
+- Migration **`20261104200000_goods_receipts.sql`**, after all existing migrations through **`20261104190000_list_purchase_orders.sql`**. Applied migrations unchanged. Tables, tenant-safe composite keys, transactional GR counter, RLS/read-only API tables, atomic creation, one-statement invoker receipt read and shared receiving summary.
+- Positive exact numeric(18,3) receipt quantities, 1–100 distinct PO lines, partial/multiple receipts, no over-receiving. Authorize/recheck membership, lock the PO row, sum received quantities after locking, insert/seal receipt and automate partially_received/received in one transaction. Same lock serializes cancellation; any receipt prevents cancellation.
+- Product type captured on new PO selections and preserved for kept draft lines. Inventory/non-inventory are receivable; services rejected and excluded from completion. Service-only POs stay ordered. Legacy unknown types block receiving pending historical reconciliation; never guessed from current master data (DECISIONS 027).
+- Receipt snapshots derive exclusively from PO lines. Sealing/deferred completeness and immutable triggers protect headers/items, even privileged writes; organization/PO deletion cannot purge history. Receipt creator Auth deletion is restricted. All active roles create/view; none edit/delete.
+- Domain validation, exact arithmetic, safe error/messages and create/read/summary in `lib/goods-receipts/`. SQL regression suite plus four Vitest suites. Existing PO SQL allowlist recognizes the summary RPC.
+- Goods Receipt is the future source document for stock-in; inventory cutover/backfill remains future work.
+
+### Verification (local only)
+
+- [x] `npm test`: **920 passed across 60 files** (82 new receiving tests).
+- [x] `npm run lint`: passed.
+- [x] `npx tsc --noEmit`: passed.
+- [x] All **21 migrations** apply and all **ten SQL suites** pass locally in PGlite with simulated Supabase Auth/API roles/default grants. Extended receiving snapshot/100-line/late-failure checks also pass.
+- [ ] `npm run build`: attempted normally and with approved escalation; both fail in the existing Turbopack CSS worker while binding a local port (`Operation not permitted`). Re-run where worker binding is allowed.
+- [ ] Native local Supabase/PostgREST and actual two-session receiving/cancellation waits: manual procedure in `docs/testing/tenant-isolation.md` § 10. Embedded execution verifies locking structure, not actual waiting.
+- [ ] Deployment/manual: apply the new migration only after its predecessors. Reconcile legacy unknown product types using historical evidence before receiving those POs. No remote Supabase access, commit or push performed.
+- No product decision is required to use new physical POs. Future explicit service fulfilment, legacy reconciliation evidence, inventory cutover and receipt reversal/purge are outside this task.
+
 ## Purchase Order Management – Part 2 (UI)
 
 Built the Purchase Order UI on the Part 1 backend (DECISIONS 026), reusing the invoice Part 2 patterns (DECISIONS 021, 024). No Goods Receiving, stock ledger/quantities/reservations, supplier bills/payments, returns, warehouses or landed cost.

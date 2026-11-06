@@ -429,3 +429,20 @@ Migration: `20261104180000_purchase_orders.sql` (DECISIONS 026).
 New active products of all types default to purchase_price, never selling_price; explicit price is required if absent. Unchanged vendor/kept product references preserve historical snapshots even when inactive. Changing a reference requires active master data and new snapshots. Omitted kept-line price/description use recorded defaults; explicit commercial values remain editable in draft. Item IDs are temporary edit tokens replaced at save; unknown/repeated/foreign IDs fail. Original-product re-selection restores its recorded snapshot/description/unit/PO price in future UI.
 
 RLS permits active tenant members to read; authenticated clients have no direct writes. Three checked write RPCs control mutations. `get_purchase_order` returns one consistent document and exact decimal strings. Non-drafts are commercially immutable. All purchase orders reject hard deletion, even by privileged writers; organization deletion may fail. Purchase orders have no stock effect. Goods Receiving will provide inventory stock-in and receiving-state changes, and tighten cancellation after goods are received.
+
+### Goods Receiving — Part 1
+
+Migration `20261104200000_goods_receipts.sql`, after `20261104190000_list_purchase_orders.sql`. See DECISIONS 027; this supersedes Part 1's receiving/cancellation reservations.
+
+`goods_receipts`: UUID `id`, required `organization_id`, unique organization-scoped `goods_receipt_number` (`GR-` + at least six digits), tenant-safe `purchase_order_id`, finite required `received_date`, optional trimmed 1–2000-code-point `notes`, required `created_by` Auth FK, `created_at`, `updated_at`, internal `sealed` boolean. Unique tenant/id and tenant/id/PO keys support composite references. Indexes cover organization/PO, organization/date/id, actor and organization/number. The header is sealed and nonempty before commit and never editable/deletable after creation. Auth actor deletion is restricted to preserve receipt identity.
+
+`goods_receipt_items`: UUID `id`; required `organization_id`, `goods_receipt_id`, `purchase_order_id`, `purchase_order_item_id`, `product_id`; PO-copied `product_name`, `sku`, nullable `description`, `unit`, `product_type`; positive exact numeric(18,3) `ordered_quantity_snapshot` and `received_quantity`; `sort_order` 1–100; `created_at`. Unique tenant/id, receipt/source line and receipt/sort. Composite FKs ensure receipt and source line refer to the same organization/PO/product. Indexes cover tenant/source-line aggregation and tenant/product. No cascades delete receipt history.
+
+PO lines gain nullable `product_type` (`inventory`, `non_inventory`, `service`). New lines capture it, kept draft lines retain it, and frozen legacy lines stay unknown rather than guessing from master data. Receiving any PO with unknown types is blocked pending evidence-backed reconciliation. Inventory/non-inventory can be received; services cannot. Service-only POs remain ordered; service lines do not block completion of a mixed PO.
+
+One PO may have many immutable receipts. Sum items by source line for cumulative received quantities; subtract from original PO quantity for remaining. No cached received balance. Parent-row locks prevent concurrent over-receiving. The receipt transaction automatically sets partially_received/received from physical lines; receiving targets remain denied to the PO user-status RPC. Any receipt blocks PO cancellation at database level.
+
+Receipt creation is the future inventory stock-in event, with durable receipt/item source IDs. No stock movements, stock balances, mutable product quantity or financial transactions exist in this task.
+
+
+Goods Receiving review (DECISIONS 028): received_date must be on/after the PO order_date, including privileged header inserts. Summaries count sealed receipt items only; sealing reconciles PO receiving status for every writer, and direct inconsistent PO states fail with GR009. Both receipt and PO headers/items reject TRUNCATE via statement triggers. The unapplied receiving migration is edited directly, as confirmed by the user.

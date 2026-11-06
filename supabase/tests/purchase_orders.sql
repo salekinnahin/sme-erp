@@ -1,4 +1,4 @@
--- Purchase Order Part 1. Run locally as postgres after 20261104180000.
+-- Purchase Orders. Run locally as postgres after 20261104200000 (receiving-backed status fixtures).
 -- Simulates API roles/JWTs; all fixtures and temporary helpers roll back.
 begin;
 create function pg_temp.expect_error(p_sql text, p_code text) returns void
@@ -84,9 +84,9 @@ begin
  for f in select p.*,l.lanname from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang
    where n.nspname='public' and (p.proname like '%purchase_order%' ) loop
   if not (f.proconfig @> array['search_path=""']) then raise exception 'FAIL: search path %',f.proname; end if;
-  if f.proname in ('create_purchase_order','update_purchase_order_draft','set_purchase_order_status','get_purchase_order','list_purchase_orders') then
+  if f.proname in ('create_purchase_order','update_purchase_order_draft','set_purchase_order_status','get_purchase_order','list_purchase_orders','get_purchase_order_receiving_summary') then
    if not has_function_privilege('authenticated',f.oid,'EXECUTE') or has_function_privilege('anon',f.oid,'EXECUTE') then raise exception 'FAIL: RPC grants'; end if;
-   if f.proname in ('get_purchase_order','list_purchase_orders') then
+   if f.proname in ('get_purchase_order','list_purchase_orders','get_purchase_order_receiving_summary') then
     if f.prosecdef or f.provolatile <> 's' or f.lanname <> 'sql' then raise exception 'FAIL: read definition'; end if;
    elsif not f.prosecdef then raise exception 'FAIL: write definition'; end if;
   elsif has_function_privilege('authenticated',f.oid,'EXECUTE') or has_function_privilege('anon',f.oid,'EXECUTE') then
@@ -325,14 +325,16 @@ begin
   perform pg_temp.expect_error(format('delete from public.purchase_orders where id=%L',v_target),'55000');
  end loop;
  perform pg_temp.expect_error('delete from public.purchase_orders','55000');
+ perform pg_temp.expect_error('truncate public.purchase_orders cascade','55000');
+ perform pg_temp.expect_error('truncate public.purchase_order_items cascade','55000');
  perform pg_temp.expect_error(format('delete from public.organizations where id=%L',current_setting('test.po_org_a')),'55000');
  -- Composite references hold for privileged tools too.
  perform pg_temp.expect_error(format('update public.purchase_orders set vendor_id=%L where id=%L',current_setting('test.po_vendor_b'),current_setting('test.po_main')),'23503');
  perform pg_temp.expect_error(format('update public.purchase_order_items set product_id=%L where purchase_order_id=%L',current_setting('test.po_product_b'),current_setting('test.po_main')),'23503');
  perform pg_temp.expect_error(format('update public.purchase_order_items set organization_id=%L where purchase_order_id=%L',current_setting('test.po_org_b'),current_setting('test.po_main')),'23503');
- -- Reserved receiving transitions are legal for a future trusted module,
- -- but remain immutable and terminal as specified. No receiving RPC exists.
- update public.purchase_orders set status='partially_received' where id=po;
+ -- Receiving states now require real receipts (Goods Receiving Part 1).
+ perform public.create_goods_receipt(po,date '2026-11-06',null,
+  (select jsonb_agg(jsonb_build_object('purchase_order_item_id',id,'received_quantity','1')) from public.purchase_order_items where purchase_order_id=po));
  select jsonb_agg(to_jsonb(i) order by i.id) into before_items
  from public.purchase_order_items i where purchase_order_id=po;
  if before_items is null then raise exception 'FAIL: partially received fixture has no items'; end if;
@@ -346,7 +348,8 @@ begin
   or (select jsonb_agg(to_jsonb(i) order by i.id) from public.purchase_order_items i where purchase_order_id=po) is distinct from before_items then
   raise exception 'FAIL: rejected partially received delete changed order/items';
  end if;
- update public.purchase_orders set status='received' where id=po;
+ perform public.create_goods_receipt(po,date '2026-11-06',null,
+  (select jsonb_agg(jsonb_build_object('purchase_order_item_id',id,'received_quantity','2')) from public.purchase_order_items where purchase_order_id=po));
  perform pg_temp.expect_error(format('update public.purchase_orders set status=''cancelled'' where id=%L',po),'55000');
  perform pg_temp.expect_error(format('delete from public.purchase_orders where id=%L',po),'55000');
 end $$;
