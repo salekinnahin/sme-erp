@@ -1,5 +1,44 @@
 # Current Task
 
+## Goods Receiving – Received By snapshot and history item count (2026-11-07)
+
+Two focused Part 2 improvements (DECISIONS 032). No Inventory, no quantity/status/concurrency/sealing/cancellation/service/permission changes, no profile access widening.
+
+- Migration **`20261104230000_goods_receipt_received_by_snapshot.sql`** (after `20261104220000`; earlier migrations unchanged): nullable `goods_receipts.received_by_name` with trim/length CHECK; private BEFORE INSERT trigger snapshots `profiles.full_name` of `created_by` (overwrites any supplied value, all insert paths); `get_goods_receipt()` returns it; `list_goods_receipts()` recreated returning `item_count` + `received_by_name` (mixed-unit total and raw creator removed; search/paging/order/grants unchanged).
+- No backfill: existing receipts and recorders without a profile name show "Name not recorded" (no email fallback, no invented names).
+- UI: list, detail, PO history and GRN print show the stored name ("Received By: Rahim Uddin" + signature line). PO history columns: GR number, Received date, Items, Received by. "You" / "Another team member" removed.
+
+### Verification (local only)
+
+- [x] `npm test`: **1286 passed / 77 files** (snapshot/item-count assertions replace the viewer-relative label tests).
+- [x] `npm run lint`; `npx tsc --noEmit`; `npm run build` (default) succeeded.
+- [x] All 24 migrations apply; all **eleven** SQL suites pass on local PGlite. `goods_receipts.sql` extended; five snapshot mutations each fail.
+- [ ] Manual: apply `20261104220000` then `20261104230000`, re-run `goods_receipts.sql` and `purchase_orders.sql` in the SQL Editor; browser checks in `docs/testing/tenant-isolation.md` § 10.1.
+- No remote Supabase access, commit or push.
+
+## Previous task
+
+## Goods Receiving – Part 2 UI (2026-11-07)
+
+Built the Goods Receiving UI on the Part 1 backend and the shared design system (DECISIONS 031). Flow: PO → Receive goods → enter quantities → Record goods receipt → PO status updates from the database. No stock ledger, balances, warehouses, returns/reversals, supplier bills/payments, attachments or inspection.
+
+- Routes: `/purchase-orders/[id]/receive`, `/goods-receipts`, `/goods-receipts/[id]`, `/goods-receipts/[id]/print`. No `/goods-receipts/new`. Nav "Goods receipts" under Purchases; proxy prefix `/goods-receipts`; GRN print bypasses the shell.
+- PO detail: Receiving section (backend summary: ordered/received/remaining, services "—"), receipt history (one query, compact empty state, links), **Receive goods** / **Receive remaining goods** only for ordered/partially received POs with something receivable, all active roles. Cancel hidden once any receipt exists.
+- Receive form: exact decimal strings, blank/zero omitted, ≥ 1 positive line, ≤ remaining ("You can receive a maximum of 30.000."), received date default today in org timezone and ≥ order date (client + server), optional notes, services/fully received lines not editable, Fill all remaining / Clear, pending + double-submit guard. Posts only line ID + quantity. Stale/concurrent failures show one friendly message and refresh with the latest summary. Mobile: same table as stacked line cards.
+- List (search GR/PO/vendor snapshot, 25/page), read-only detail (View purchase order, Print only), GRN print with `DocumentBrandHeader`, items, notes and signature lines. "Received by" later replaced by a stored name snapshot (see above). Success copy: "Goods receipt recorded successfully." No stock wording.
+- Migration **`20261104220000_list_goods_receipts.sql`** (after `20261104210000_organization_branding.sql`; no earlier migration changed): `list_goods_receipts()` invoker read for list and PO history. `createGoodsReceipt()` gained an order-date pre-check (same rule as GR007); no other Part 1 change.
+
+### Verification (local only)
+
+- [x] `npm test`: **1286 passed / 77 files** (125 new checks, 5 new files; existing nav/component tests updated for the now-real `/goods-receipts` route).
+- [x] `npm run lint`; `npx tsc --noEmit` (after `next typegen`).
+- [x] `npm run build` (default Turbopack) succeeded, including the four new routes.
+- [x] All 23 migrations apply and all **eleven** SQL suites pass on local PGlite with simulated Auth/API roles. `goods_receipts.sql` extended (list/history/search/wildcards/Unicode/paging/order/isolation/disabled/anon); six mutations of the new RPC each fail the intended assertion.
+- [ ] Manual: apply `20261104220000_list_goods_receipts.sql`, re-run `goods_receipts.sql` in the SQL Editor, then the signed-in checks in `docs/testing/tenant-isolation.md` § 10.1 (including two-tab stale receiving and mobile cards).
+- No remote Supabase access, commit or push.
+
+## Previous task
+
 ## UI Revamp review fixes (2026-11-06)
 
 - Fixed root recovery with installed Next.js 16.4.5 `retry` (user confirmed; `unstable_retry` is absent from this runtime). Safe error presentation retained.

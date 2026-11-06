@@ -54,6 +54,11 @@ vi.mock("@/lib/purchase-orders/purchase-orders", () => ({
   listPurchaseOrders: async (tenant: unknown, params: { page: number }) => { mocks.list(tenant, params); return { items: mocks.empty ? [] : [fixture.FIXTURE_PURCHASE_ORDER], total: mocks.empty ? 0 : 60, page: params.page, pageSize: 25 }; },
   getPurchaseOrder: async () => mocks.missing ? null : ({ ...fixture.FIXTURE_PURCHASE_ORDER, status: mocks.status }),
 }));
+vi.mock("@/lib/goods-receipts/goods-receipts", () => ({
+  listGoodsReceipts: async (tenant: unknown, params: { page: number }) => { mocks.list(tenant, params); return { items: mocks.empty ? [] : [fixture.FIXTURE_GOODS_RECEIPT_ROW], total: mocks.empty ? 0 : 60, page: params.page, pageSize: 25 }; },
+  getPurchaseOrderReceivingSummary: async () => [],
+  listPurchaseOrderGoodsReceipts: async () => ({ items: [], total: 0, limit: 25 }),
+}));
 vi.mock("@/app/purchase-orders/actions", () => ({ createPurchaseOrderAction: async () => ({}), updatePurchaseOrderAction: async () => ({}), setPurchaseOrderStatusAction: async () => ({}), searchPurchaseOrderVendorsAction: async () => ({}), searchPurchaseOrderProductsAction: async () => ({}) }));
 vi.mock("@/lib/quotations/options", () => ({ listCustomerOptions: async () => ({ options: [fixture.FIXTURE_CONTACT], truncated: false }), getCustomerOption: async () => fixture.FIXTURE_CONTACT, getProductOptions: async () => [fixture.FIXTURE_PRODUCT] }));
 vi.mock("@/lib/purchase-orders/options", () => ({ listVendorFilterOptions: async () => ({ options: [fixture.FIXTURE_CONTACT], more: false }), getVendorOption: async () => fixture.FIXTURE_CONTACT, getPurchaseProductOptions: async () => [fixture.FIXTURE_PRODUCT] }));
@@ -77,6 +82,7 @@ import InvoiceNewPage from "@/app/invoices/new/page";
 import InvoiceEditPage from "@/app/invoices/[id]/edit/page";
 import InvoicePrintPage from "@/app/invoices/[id]/print/page";
 import PurchaseOrderListPage from "@/app/purchase-orders/page";
+import GoodsReceiptListPage from "@/app/goods-receipts/page";
 import PurchaseOrderDetailPage from "@/app/purchase-orders/[id]/page";
 import PurchaseOrderNewPage from "@/app/purchase-orders/new/page";
 import PurchaseOrderEditPage from "@/app/purchase-orders/[id]/edit/page";
@@ -94,6 +100,7 @@ const lists = [
   ["sales-orders", SalesOrderListPage],
   ["invoices", InvoiceListPage],
   ["purchase-orders", PurchaseOrderListPage],
+  ["goods-receipts", GoodsReceiptListPage],
  ] as const;
 describe("migrated list pages", () => {
   it.each(lists)("%s preserves GET search parameters, active filters and pagination", async (module, Page) => {

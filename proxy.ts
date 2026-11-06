@@ -13,6 +13,7 @@ const PROTECTED_PREFIXES = [
   "/sales-orders",
   "/invoices",
   "/purchase-orders",
+  "/goods-receipts",
   "/settings",
 ];
 const GUEST_ONLY_PATHS = ["/auth/login", "/auth/sign-up"];

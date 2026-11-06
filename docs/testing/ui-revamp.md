@@ -2,6 +2,10 @@
 
 This UI task preserves domain behavior (DECISIONS 030). Preserve all preceding branding work. Do not run SQL or contact remote Supabase for this verification.
 
+## Goods Receiving Part 2 UI — 2026-11-07
+
+New screens use the existing system only: PageHeader actions, SectionCard, DataTable, MetadataList, DocumentSummary rail, EmptyState, Badge, a read-only detail with no confirmation dialogs, and `DocumentBrandHeader` for the GRN. One new CSS block, `.receiving-table`: Remaining / Receive now columns carry the emphasis; at ≤ 767 px the same table (one input per line) renders as stacked line cards with labelled values. Nav gains "Goods receipts" under Purchases (route exists); `/goods-receipts/<id>/print` bypasses the shell like the other prints. `lib/ui/goods-receipts.test.ts` renders the PO receiving integration, receive page (desktop/mobile markup, terminal states), list, read-only detail and print with synthetic data. Pending manual browser checks: receive form keyboard/mobile cards at 375 px, inline error focus, GRN print preview/A4 and logo. See `docs/testing/tenant-isolation.md` § 10.1.
+
 ## Review fixes — verification on 2026-11-06
 
 This section records this follow-up only; the original desktop review below predates these fixes.

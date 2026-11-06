@@ -39,13 +39,15 @@ describe("workspace rendering", () => {
     expect(html).toContain('aria-label="Close navigation"');
     expect(html).toContain('href="#main-content"');
     expect(html).toContain('id="main-content"');
-    expect(html).not.toContain("/goods-receipts");
+    // Goods receipts is a real route now (Part 2); still no dead Rental links.
+    expect(html).toContain('href="/goods-receipts"');
+    expect(html).not.toContain("/rentals");
   });
   it("exposes the expanded menu state on its trigger", () => {
     const html = render(h(AppTopbar, { identity, section: "Invoices", menuOpen: true, onOpenMenu: () => {} }));
     expect(html).toContain('aria-expanded="true"');
   });
-  it.each(["quotations", "sales-orders", "invoices", "purchase-orders"])("renders %s print children with no sidebar, topbar, drawer or page padding", (module) => {
+  it.each(["quotations", "sales-orders", "invoices", "purchase-orders", "goods-receipts"])("renders %s print children with no sidebar, topbar, drawer or page padding", (module) => {
     route.pathname = `/${module}/abc/print`;
     expect(render(h(AppFrame, { identity, signOutControl: h("button", null, "Log out"), children: h("article", null, "Business document") }))).toBe('<div class="document-print-frame"><article>Business document</article></div>');
   });

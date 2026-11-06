@@ -5,7 +5,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: async () => {
   from.mockReturnValue(builder);
   return { rpc, from };
 } }));
-import { createGoodsReceipt, getGoodsReceipt, getPurchaseOrderReceivingSummary } from "./goods-receipts";
+import { createGoodsReceipt, getGoodsReceipt, getGoodsReceiptDocument, getPurchaseOrderReceivingSummary, listGoodsReceipts, listPurchaseOrderGoodsReceipts } from "./goods-receipts";
 const ORG = "aaaaaaaa-0000-4000-8000-000000000001";
 const PO = "bbbbbbbb-0000-4000-8000-000000000002";
 const LINE = "cccccccc-0000-4000-8000-000000000003";
@@ -58,4 +58,50 @@ it("does not read malformed IDs", async () => {
   expect(await getGoodsReceipt(tenant, "bad")).toBeNull();
   expect(await getPurchaseOrderReceivingSummary(tenant, "bad")).toEqual([]);
   expect(rpc).not.toHaveBeenCalled();
+});
+it("rejects a received date before the PO order date before reading lines (GR007 preview)", async () => {
+  rpc.mockReset().mockResolvedValueOnce({ data: summary, error: null }).mockResolvedValue({ data: "receipt", error: null });
+  maybeSingle.mockResolvedValue({ data: { status: "ordered", order_date: "2026-11-07" }, error: null });
+  expect(await createGoodsReceipt(tenant, raw)).toEqual({ ok: false, reason: "invalid_date" });
+  expect(rpc).not.toHaveBeenCalled();
+  maybeSingle.mockResolvedValue({ data: { status: "ordered", order_date: "2026-11-06" }, error: null });
+  expect(await createGoodsReceipt(tenant, raw)).toEqual({ ok: true, goodsReceiptId: "receipt" });
+});
+const row = { id: "r", goods_receipt_number: "GR-000001", purchase_order_id: PO, purchase_order_number: "PO-000001", vendor_name: "V", vendor_company_name: null,
+  received_date: "2026-11-07", item_count: 3, received_by_name: "Rahim Uddin", created_at: "2026-11-07T00:00:00Z", total_count: "31" };
+it("lists one page with one tenant-filtered RPC and exact quantity strings", async () => {
+  rpc.mockReset().mockResolvedValue({ data: [row], error: null });
+  const list = await listGoodsReceipts(tenant, { search: "PO-1", page: 2 });
+  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(rpc).toHaveBeenCalledWith("list_goods_receipts", { p_organization_id: ORG, p_search: "PO-1", p_purchase_order_id: null, p_limit: 25, p_offset: 25 });
+  expect(list).toMatchObject({ total: 31, page: 2, pageSize: 25, items: [{ goodsReceiptNumber: "GR-000001", itemCount: 3, receivedByName: "Rahim Uddin" }] });
+  expect(list.items[0]).not.toHaveProperty("totalReceivedQuantity");
+  expect(list.items[0]).not.toHaveProperty("createdBy");
+  rpc.mockReset().mockResolvedValue({ data: [], error: null });
+  expect((await listGoodsReceipts(tenant, { search: "", page: 9 })).total).toBeNull();
+  expect((await listGoodsReceipts(tenant, { search: "", page: 1 })).total).toBe(0);
+});
+it("reads PO receipt history in one query and skips malformed IDs", async () => {
+  rpc.mockReset().mockResolvedValue({ data: [row], error: null });
+  expect(await listPurchaseOrderGoodsReceipts(tenant, PO)).toMatchObject({ total: 31, items: [{ id: "r" }] });
+  expect(rpc).toHaveBeenCalledWith("list_goods_receipts", { p_organization_id: ORG, p_search: null, p_purchase_order_id: PO, p_limit: 25, p_offset: 0 });
+  rpc.mockClear();
+  expect(await listPurchaseOrderGoodsReceipts(tenant, "bad")).toEqual({ items: [], total: 0, limit: 25 });
+  expect(rpc).not.toHaveBeenCalled();
+});
+it("never exposes database errors from reads", async () => {
+  rpc.mockReset().mockResolvedValue({ data: null, error: { code: "XX000", message: "private details" } });
+  await expect(listGoodsReceipts(tenant, { search: "", page: 1 })).rejects.toThrow("Could not load goods receipts.");
+});
+it("reads the receipt document with its PO vendor snapshot, tenant-filtered", async () => {
+  const doc = { id: "r", purchase_order_id: PO, items: [] };
+  rpc.mockReset().mockResolvedValue({ data: doc, error: null });
+  maybeSingle.mockResolvedValue({ data: { vendor_name: "Vendor", vendor_company_name: "Co", vendor_phone: null, vendor_email: null, vendor_address: null, vendor_tax_number: null }, error: null });
+  expect(await getGoodsReceiptDocument(tenant, PO)).toMatchObject({ id: "r", vendor: { name: "Vendor", companyName: "Co" } });
+  expect(eq).toHaveBeenCalledWith("organization_id", ORG);
+  expect(eq).toHaveBeenCalledWith("id", PO);
+  rpc.mockReset().mockResolvedValue({ data: null, error: null });
+  from.mockClear();
+  expect(await getGoodsReceiptDocument(tenant, PO)).toBeNull();
+  expect(from).not.toHaveBeenCalled();
 });

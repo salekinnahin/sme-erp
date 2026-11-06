@@ -34,3 +34,8 @@ export const FIXTURE_SALES_ORDER = { ...common, salesOrderNumber: "SO-000128", o
 export const FIXTURE_INVOICE = { ...common, invoiceNumber: "INV-000128", invoiceDate: "2026-11-06", dueDate: "2026-11-30", sourceSalesOrderId: null, sourceSalesOrderNumber: null, amountPaid: "0.00", amountDue: "36750.00" };
 export const FIXTURE_PURCHASE_ORDER = { ...common, purchaseOrderNumber: "PO-000128", vendorId: FIXTURE_ID, vendorName: FIXTURE_CONTACT.name, vendorCompanyName: FIXTURE_CONTACT.companyName, vendorPhone: FIXTURE_CONTACT.phone, vendorEmail: FIXTURE_CONTACT.email, vendorAddress: FIXTURE_CONTACT.address, vendorTaxNumber: FIXTURE_CONTACT.taxNumber, orderDate: "2026-11-06", expectedDeliveryDate: "2026-11-15" };
 export const FIXTURE_BRANDING = { name: FIXTURE_TENANT.organization.name, address: "18 Business Avenue\nDhaka, Bangladesh", email: "hello@northstar.example", phone: "+880 1800 000000", taxNumber: "TIN-5678", logoUrl: null, logoUpdatedAt: null };
+export const FIXTURE_GOODS_RECEIPT_ROW = {
+  id: "a1000000-0000-4000-8000-000000000004", goodsReceiptNumber: "GR-000042", purchaseOrderId: FIXTURE_ID, purchaseOrderNumber: "PO-000128",
+  vendorName: FIXTURE_CONTACT.name, vendorCompanyName: "Eastern Supply Holdings", receivedDate: "2026-11-07", itemCount: 3,
+  receivedByName: "Rahim Uddin", createdAt: "2026-11-07T06:00:00Z",
+};

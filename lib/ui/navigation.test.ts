@@ -8,7 +8,8 @@ describe("workspace navigation", () => {
     expect(groups.map((group) => group.label)).toEqual(["Overview", "Sales", "Purchases", "Inventory", "Settings"]);
     expect(groups.find((group) => group.label === "Sales")?.items.map((item) => item.label)).toEqual(["Customers", "Quotations", "Sales orders", "Invoices"]);
     const links = groups.flatMap((group) => group.items);
-    expect(new Set(links.map((item) => item.href)).size).toBe(9);
+    expect(groups.find((group) => group.label === "Purchases")?.items.map((item) => item.label)).toEqual(["Vendors", "Purchase orders", "Goods receipts"]);
+    expect(new Set(links.map((item) => item.href)).size).toBe(10);
     for (const item of links) expect(existsSync(`app${item.href}/page.tsx`), item.href).toBe(true);
   });
   it.each([undefined, false, true])("does not invent a Rental route for entitlement %s", (rentals) => {
@@ -30,7 +31,12 @@ describe("workspace navigation", () => {
     expect(isActiveRoute("/products-other", "/products")).toBe(false);
     expect(activeNavItem("/unimplemented")).toBeUndefined();
   });
-  it.each(["quotations", "sales-orders", "invoices", "purchase-orders"])("bypasses the shell only for %s document print routes", (module) => {
+  it("keeps Goods receipts active on its detail and print routes, and PO receiving under Purchase orders", () => {
+    expect(activeNavItem("/goods-receipts/abc")?.label).toBe("Goods receipts");
+    expect(activeNavItem("/purchase-orders/abc/receive")?.label).toBe("Purchase orders");
+    expect(isDocumentPrintRoute("/purchase-orders/abc/receive")).toBe(false);
+  });
+  it.each(["quotations", "sales-orders", "invoices", "purchase-orders", "goods-receipts"])("bypasses the shell only for %s document print routes", (module) => {
     expect(isDocumentPrintRoute(`/${module}/document/print`)).toBe(true);
     expect(isDocumentPrintRoute(`/${module}/document/print/`)).toBe(true);
     expect(isDocumentPrintRoute(`/${module}/print`)).toBe(false);

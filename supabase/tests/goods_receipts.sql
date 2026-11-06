@@ -132,7 +132,9 @@ update public.products set name='Changed',description='Changed',unit='pcs',produ
 set local role authenticated;
 do $$ declare po uuid:=current_setting('test.gr_snapshot_po')::uuid; line uuid; rid uuid; d jsonb; begin
  select id into line from public.purchase_order_items where purchase_order_id=po;
- perform public.update_purchase_order_draft(po,current_setting('test.gr_vendor')::uuid,current_date,null,null,
+ -- Fixed order date: pg_temp.receive() records 2026-11-06, and receiving
+ -- before the order date is rejected (GR007) whatever the server's today is.
+ perform public.update_purchase_order_draft(po,current_setting('test.gr_vendor')::uuid,date '2026-11-06',null,null,
   jsonb_build_array(jsonb_build_object('id',line,'product_id',current_setting('test.gr_inventory'),'quantity','1')));
  select id into line from public.purchase_order_items where purchase_order_id=po;
  if (select product_type from public.purchase_order_items where id=line)<>'inventory' then raise exception 'kept line type changed'; end if;
@@ -280,9 +282,9 @@ do $$ declare q text; t text; r text; f record; rid uuid:=current_setting('test.
  for f in select p.*,l.lanname from pg_proc p join pg_namespace n on n.oid=p.pronamespace join pg_language l on l.oid=p.prolang
   where n.nspname='public' and (p.proname like '%goods_receipt%' or p.proname='get_purchase_order_receiving_summary') loop
   if not (f.proconfig @> array['search_path=""']) then raise exception 'search path %',f.proname; end if;
-  if f.proname in ('get_goods_receipt','get_purchase_order_receiving_summary') and (f.prosecdef or f.provolatile<>'s' or f.lanname<>'sql') then raise exception 'read definition'; end if;
+  if f.proname in ('get_goods_receipt','get_purchase_order_receiving_summary','list_goods_receipts') and (f.prosecdef or f.provolatile<>'s' or f.lanname<>'sql') then raise exception 'read definition'; end if;
   if has_function_privilege('anon',f.oid,'EXECUTE') then raise exception 'anon RPC'; end if;
-  if f.proname not in ('get_goods_receipt','get_purchase_order_receiving_summary','create_goods_receipt') and has_function_privilege('authenticated',f.oid,'EXECUTE') then raise exception 'helper grants'; end if;
+  if f.proname not in ('get_goods_receipt','get_purchase_order_receiving_summary','list_goods_receipts','create_goods_receipt') and has_function_privilege('authenticated',f.oid,'EXECUTE') then raise exception 'helper grants'; end if;
  end loop;
  if (select prosrc from pg_proc where oid='public.create_goods_receipt(uuid,date,text,jsonb)'::regprocedure) !~* 'for update'
   or (select prosrc from pg_proc where oid='public.goods_receipt_items_enforce_rules()'::regprocedure) !~* 'for update'
@@ -333,6 +335,188 @@ do $$ declare po uuid; rid uuid; j jsonb; line uuid; begin
  perform pg_temp.expect_error(format('select public.create_goods_receipt(%L,current_date,null,%L)',po,j),'GR001');
  if exists(select 1 from public.get_purchase_order_receiving_summary(current_setting('test.gr_org')::uuid,po) where remaining_quantity<>'0.002') then raise exception 'late failure persisted items'; end if;
 end $$;
+-- -----------------------------------------------------------------------------
+-- Part 2 list/history read (20261104220000_list_goods_receipts.sql).
+-- -----------------------------------------------------------------------------
+do $$ declare f record; begin
+ select p.prosecdef, p.provolatile, p.proconfig, l.lanname, p.oid into f from pg_proc p join pg_language l on l.oid=p.prolang
+ where p.oid='public.list_goods_receipts(uuid,text,uuid,integer,integer)'::regprocedure;
+ if f.prosecdef or f.provolatile<>'s' or f.lanname<>'sql' or not (f.proconfig @> array['search_path=""']) then raise exception 'list definition'; end if;
+ if has_function_privilege('anon',f.oid,'EXECUTE') or has_function_privilege('public',f.oid,'EXECUTE')
+  or not has_function_privilege('authenticated',f.oid,'EXECUTE') then raise exception 'list grants'; end if;
+end $$;
+reset role;
+insert into public.vendors(organization_id,name,company_name) values
+ (current_setting('test.gr_org')::uuid,'Wild%_Card Supply','Ünïcode Traders'),
+ (current_setting('test.gr_org')::uuid,'Wildx Card Supply','Plain Traders');
+set local role authenticated;
+do $$ declare o uuid:=current_setting('test.gr_org')::uuid; v uuid; v2 uuid; po uuid; po2 uuid; a uuid; b uuid; s uuid;
+ r1 uuid; r2 uuid; r3 uuid; r4 uuid; n1 text; n2 text; ids uuid[]; rec record; total bigint; begin
+ select id into v from public.vendors where organization_id=o and name='Wild%_Card Supply';
+ select id into v2 from public.vendors where organization_id=o and name='Wildx Card Supply';
+ -- The inventory fixture product was deactivated above; use active products.
+ po:=public.create_purchase_order(v,date '2026-11-01',null,null,jsonb_build_array(
+  jsonb_build_object('product_id',current_setting('test.gr_non_inventory'),'quantity','100'),
+  jsonb_build_object('product_id',current_setting('test.gr_non_inventory'),'quantity','50'),
+  jsonb_build_object('product_id',current_setting('test.gr_service'),'quantity','1')));
+ perform public.set_purchase_order_status(po,'ordered');
+ select id into a from public.purchase_order_items where purchase_order_id=po and sort_order=1;
+ select id into b from public.purchase_order_items where purchase_order_id=po and sort_order=2;
+ select id into s from public.purchase_order_items where purchase_order_id=po and sort_order=3;
+ -- No receipts yet: empty history.
+ if exists(select 1 from public.list_goods_receipts(o,null,po)) then raise exception 'history before receipt'; end if;
+ -- A 100 -> 30, B 50 -> 20 (service never receivable), then two later receipts.
+ r1:=public.create_goods_receipt(po,date '2026-11-06',null,jsonb_build_array(
+  jsonb_build_object('purchase_order_item_id',a,'received_quantity','30'),
+  jsonb_build_object('purchase_order_item_id',b,'received_quantity','20.5')));
+ r2:=public.create_goods_receipt(po,date '2026-11-08',null,jsonb_build_array(jsonb_build_object('purchase_order_item_id',a,'received_quantity','0.125')));
+ r3:=public.create_goods_receipt(po,date '2026-11-07',null,jsonb_build_array(jsonb_build_object('purchase_order_item_id',b,'received_quantity','1')));
+ po2:=public.create_purchase_order(v2,date '2026-11-01',null,null,jsonb_build_array(jsonb_build_object('product_id',current_setting('test.gr_non_inventory'),'quantity','5')));
+ perform public.set_purchase_order_status(po2,'ordered');
+ r4:=public.create_goods_receipt(po2,date '2026-11-08',null,jsonb_build_array(jsonb_build_object('purchase_order_item_id',
+  (select id from public.purchase_order_items where purchase_order_id=po2 and sort_order=1),'received_quantity','2')));
+ -- History: only this PO, newest received date first, aggregates exact.
+ select array_agg(l.id order by l.ord) into ids from public.list_goods_receipts(o,null,po,100,0) with ordinality as l(id,gn,poid,pon,vn,vc,rd,ic,rbn,ca,tc,ord);
+ if ids is distinct from array[r2,r3,r1] then raise exception 'history order %',ids; end if;
+ select * into rec from public.list_goods_receipts(o,null,po) where id=r1;
+ if rec.item_count<>2 or rec.total_count<>3 or rec.purchase_order_id<>po
+  or rec.vendor_name<>'Wild%_Card Supply' or rec.vendor_company_name<>'Ünïcode Traders' or rec.received_date<>'2026-11-06'
+  or rec.received_by_name is not null or rec.purchase_order_number<>(select purchase_order_number from public.purchase_orders where id=po)
+  then raise exception 'history row %',rec; end if;
+ if (select item_count from public.list_goods_receipts(o,null,po) where id=r2)<>1 then raise exception 'single-line item count'; end if;
+ -- Search: GR number, PO number, vendor name, vendor company, case-insensitive.
+ select goods_receipt_number into n1 from public.goods_receipts where id=r1;
+ if (select array_agg(id) from public.list_goods_receipts(o,lower(n1))) is distinct from array[r1] then raise exception 'GR search'; end if;
+ select purchase_order_number into n2 from public.purchase_orders where id=po2;
+ if (select array_agg(id) from public.list_goods_receipts(o,n2)) is distinct from array[r4] then raise exception 'PO search'; end if;
+ if (select count(*) from public.list_goods_receipts(o,'WILD%_CARD')) <> 3 then raise exception 'vendor name search'; end if;
+ if (select count(*) from public.list_goods_receipts(o,'Plain Traders')) <> 1 then raise exception 'vendor company search'; end if;
+ -- Literal wildcards: '%' / '_' only match names containing them; 'd%_C' does not match 'dx C'.
+ if (select count(*) from public.list_goods_receipts(o,'%'))<>3 or (select count(*) from public.list_goods_receipts(o,'_'))<>3
+  or (select count(*) from public.list_goods_receipts(o,'Wildx_Card'))<>0 or (select count(*) from public.list_goods_receipts(o,'d%_C'))<>3
+  then raise exception 'wildcard escaping'; end if;
+ -- Unicode whitespace trimmed; blank search means no filter.
+ if (select count(*) from public.list_goods_receipts(o,E'  Ünïcode　 '))<>3 then raise exception 'unicode trim'; end if;
+ select count(*) into total from public.goods_receipts where organization_id=o and sealed;
+ if (select count(*) from public.list_goods_receipts(o,E'    ',null,100))<>least(total,100)
+  or (select max(total_count) from public.list_goods_receipts(o,E'   '))<>total then raise exception 'blank search'; end if;
+ -- Pagination: 25 default, clamped limit/offset, stable pages, total before paging.
+ if (select count(*) from public.list_goods_receipts(o))<>least(total,25)
+  or (select count(*) from public.list_goods_receipts(o,null,null,0))<>1
+  or (select count(*) from public.list_goods_receipts(o,null,null,-5))<>1
+  or (select count(*) from public.list_goods_receipts(o,null,null,null))<>least(total,25)
+  or (select count(*) from public.list_goods_receipts(o,null,null,1000))<>least(total,100)
+  or (select array_agg(id) from public.list_goods_receipts(o,null,po,1,-3)) is distinct from array[r2]
+  or (select array_agg(id) from public.list_goods_receipts(o,null,po,1,1)) is distinct from array[r3]
+  or (select array_agg(id) from public.list_goods_receipts(o,null,po,2,2)) is distinct from array[r1]
+  or (select max(total_count) from public.list_goods_receipts(o,null,po,1,1))<>3
+  or exists(select 1 from public.list_goods_receipts(o,null,po,25,3)) then raise exception 'pagination'; end if;
+ if (select array_agg(id) from public.list_goods_receipts(o,null,null,100)) is distinct from
+    (select array_agg(id) from (select id from public.list_goods_receipts(o,null,null,100)) x) then raise exception 'stable order'; end if;
+ -- Null/other-tenant arguments never widen reads.
+ if exists(select 1 from public.list_goods_receipts(null))
+  or exists(select 1 from public.list_goods_receipts(current_setting('test.gr_other_org')::uuid))
+  or exists(select 1 from public.list_goods_receipts(o,null,current_setting('test.gr_other_po')::uuid)) then raise exception 'A list isolation'; end if;
+ perform set_config('test.gr_list_po',po::text,true);
+end $$;
+-- -----------------------------------------------------------------------------
+-- Received By snapshot (20261104230000_goods_receipt_received_by_snapshot.sql).
+-- -----------------------------------------------------------------------------
+reset role;
+do $$ begin
+ -- Every receipt so far was recorded while fixture profiles had no name: none invented.
+ if exists(select 1 from public.goods_receipts where received_by_name is not null) then raise exception 'unnamed recorder got a name'; end if;
+ -- Privacy: profiles keep exactly the own-row read policy; no new broad grant.
+ if (select count(*) from pg_policies where schemaname='public' and tablename='profiles')<>1
+  or (select qual from pg_policies where schemaname='public' and tablename='profiles') not like '%auth.uid()%'
+  or has_table_privilege('authenticated','public.profiles','INSERT,UPDATE,DELETE')
+  or has_function_privilege('authenticated','public.goods_receipts_snapshot_received_by()','EXECUTE') then raise exception 'profile privacy changed'; end if;
+end $$;
+update public.profiles set full_name=E'  Rahim Uddin ' where id='a9000000-0000-4000-8000-000000000001';
+update public.profiles set full_name='Karim Ahmed' where id='a9000000-0000-4000-8000-000000000004';
+update public.profiles set full_name='Other Tenant User' where id='a9000000-0000-4000-8000-000000000002';
+insert into public.products(organization_id,name,sku,unit,product_type,purchase_price)
+select current_setting('test.gr_org')::uuid,n,n,u,t,1 from (values('Bitumen','kg','inventory'),('Fuel','litre','non_inventory'),('Drum','pcs','inventory')) v(n,u,t);
+set local role authenticated;
+select set_config('request.jwt.claims','{"sub":"a9000000-0000-4000-8000-000000000001","role":"authenticated"}',true);
+do $$ declare o uuid:=current_setting('test.gr_org')::uuid; po uuid; rid uuid; d jsonb; rec record; j jsonb; begin
+ po:=public.create_purchase_order(current_setting('test.gr_vendor')::uuid,date '2026-11-01',null,null,
+  (select jsonb_agg(jsonb_build_object('product_id',id,'quantity','100') order by name) from public.products where organization_id=o and name in ('Bitumen','Drum','Fuel')));
+ perform public.set_purchase_order_status(po,'ordered');
+ -- 20 kg + 5 litre + 10 pcs; forged recorder fields inside items are ignored.
+ select jsonb_agg(jsonb_build_object('purchase_order_item_id',i.id,'received_quantity',case i.sort_order when 1 then '20' when 2 then '5' else '10' end,
+   'received_by_name','FORGED','created_by','a9000000-0000-4000-8000-000000000002') order by i.sort_order) into j
+ from public.purchase_order_items i where i.purchase_order_id=po;
+ rid:=public.create_goods_receipt(po,date '2026-11-07',null,j);
+ d:=public.get_goods_receipt(o,rid);
+ if d->>'received_by_name' is distinct from 'Rahim Uddin' or d->>'created_by'<>auth.uid()::text then raise exception 'snapshot from recorder %',d; end if;
+ select * into rec from public.list_goods_receipts(o,null,po);
+ if rec.id<>rid or rec.item_count<>3 or rec.received_by_name<>'Rahim Uddin' or rec.total_count<>1 then raise exception 'history snapshot/item count %',rec; end if;
+ if (select received_by_name from public.list_goods_receipts(o,null,null,100) where id=rid)<>'Rahim Uddin' then raise exception 'list snapshot'; end if;
+ -- No mixed-unit quantity aggregate is returned any more.
+ if pg_get_function_result('public.list_goods_receipts(uuid,text,uuid,integer,integer)'::regprocedure) ~ '(quantity|created_by)' then raise exception 'list still returns quantity/creator'; end if;
+ -- Recorder name is not a search target.
+ if exists(select 1 from public.list_goods_receipts(o,'Rahim Uddin')) then raise exception 'recorder name searchable'; end if;
+ perform set_config('test.gr_named_po',po::text,true);
+ perform set_config('test.gr_named_receipt',rid::text,true);
+ perform set_config('test.gr_named_line',(select id::text from public.purchase_order_items where purchase_order_id=po and sort_order=1),true);
+end $$;
+-- Each recorder snapshots their own name; a recorder without a profile name stores NULL (no email fallback).
+select set_config('request.jwt.claims','{"sub":"a9000000-0000-4000-8000-000000000004","role":"authenticated"}',true);
+select set_config('test.gr_employee_receipt',pg_temp.receive(current_setting('test.gr_named_po')::uuid,current_setting('test.gr_named_line')::uuid,'1')::text,true);
+select set_config('request.jwt.claims','{"sub":"a9000000-0000-4000-8000-000000000003","role":"authenticated"}',true);
+select set_config('test.gr_unnamed_receipt',pg_temp.receive(current_setting('test.gr_named_po')::uuid,current_setting('test.gr_named_line')::uuid,'1')::text,true);
+do $$ declare o uuid:=current_setting('test.gr_org')::uuid; begin
+ if (public.get_goods_receipt(o,current_setting('test.gr_employee_receipt')::uuid)->>'received_by_name') is distinct from 'Karim Ahmed'
+  or (public.get_goods_receipt(o,current_setting('test.gr_unnamed_receipt')::uuid)->>'received_by_name') is not null
+  or (public.get_goods_receipt(o,current_setting('test.gr_unnamed_receipt')::uuid)->>'created_by')<>'a9000000-0000-4000-8000-000000000003'
+  or (select array_agg(received_by_name order by received_date desc, id) from public.list_goods_receipts(o,null,current_setting('test.gr_named_po')::uuid))
+     is distinct from (select array_agg(received_by_name order by received_date desc, id) from public.goods_receipts where purchase_order_id=current_setting('test.gr_named_po')::uuid)
+  then raise exception 'per-recorder snapshots'; end if;
+ -- The manager reads the employee's name only from the receipt, never the profile.
+ if exists(select 1 from public.profiles where id in ('a9000000-0000-4000-8000-000000000001','a9000000-0000-4000-8000-000000000004')) then raise exception 'co-member profile readable'; end if;
+ -- Direct API write of the snapshot is refused.
+ perform pg_temp.expect_error(format('update public.goods_receipts set received_by_name=''X'' where id=%L',current_setting('test.gr_named_receipt')),'42501');
+end $$;
+-- Tenant B gets B's name and cannot read or influence A's.
+select set_config('request.jwt.claims','{"sub":"a9000000-0000-4000-8000-000000000002","role":"authenticated"}',true);
+do $$ declare rid uuid; begin
+ rid:=pg_temp.receive(current_setting('test.gr_other_po')::uuid,current_setting('test.gr_other_line')::uuid,'1');
+ if public.get_goods_receipt(current_setting('test.gr_other_org')::uuid,rid)->>'received_by_name' is distinct from 'Other Tenant User'
+  or public.get_goods_receipt(current_setting('test.gr_org')::uuid,current_setting('test.gr_named_receipt')::uuid) is not null
+  or exists(select 1 from public.list_goods_receipts(current_setting('test.gr_org')::uuid,null,current_setting('test.gr_named_po')::uuid)) then raise exception 'B snapshot/isolation'; end if;
+ -- B's later receipt must not be visible in A's history either.
+ perform set_config('test.gr_other_receipt2',rid::text,true);
+end $$;
+reset role;
+do $$ declare v text; begin
+ -- Historical stability: renames, disabling and a privileged rewrite attempt leave the snapshot.
+ update public.profiles set full_name='Rahim Renamed' where id='a9000000-0000-4000-8000-000000000001';
+ update public.profiles set full_name=null where id='a9000000-0000-4000-8000-000000000004';
+ update public.organization_members set status='disabled' where user_id='a9000000-0000-4000-8000-000000000004';
+ perform pg_temp.expect_error(format('update public.goods_receipts set received_by_name=''Changed'' where id=%L',current_setting('test.gr_named_receipt')),'55000');
+ perform pg_temp.expect_error(format('update public.goods_receipts set received_by_name=null, notes=''x'' where id=%L',current_setting('test.gr_employee_receipt')),'55000');
+ if (select received_by_name from public.goods_receipts where id=current_setting('test.gr_named_receipt')::uuid)<>'Rahim Uddin'
+  or (select received_by_name from public.goods_receipts where id=current_setting('test.gr_employee_receipt')::uuid)<>'Karim Ahmed'
+  or (public.get_goods_receipt(current_setting('test.gr_org')::uuid,current_setting('test.gr_employee_receipt')::uuid)->>'received_by_name')<>'Karim Ahmed'
+  or (select array_agg(received_by_name order by received_by_name) from public.list_goods_receipts(current_setting('test.gr_org')::uuid,null,current_setting('test.gr_named_po')::uuid))
+     is distinct from array['Karim Ahmed','Rahim Uddin',null]
+  then raise exception 'snapshot changed with profile/membership'; end if;
+ update public.organization_members set status='active' where user_id='a9000000-0000-4000-8000-000000000004';
+ -- A privileged insert cannot forge the name either (probe rolled back).
+ begin
+  insert into public.goods_receipts(organization_id,goods_receipt_number,purchase_order_id,received_date,created_by,received_by_name)
+  values(current_setting('test.gr_org')::uuid,'GR-777777',current_setting('test.gr_named_po')::uuid,date '2026-11-09','a9000000-0000-4000-8000-000000000001','FORGED')
+  returning received_by_name into v;
+  if v is distinct from 'Rahim Renamed' then raise exception 'privileged forged name %',v; end if;
+  raise exception 'rollback-probe';
+ exception when raise_exception then
+  if sqlerrm<>'rollback-probe' then raise; end if;
+ end;
+ if exists(select 1 from public.goods_receipts where goods_receipt_number='GR-777777') then raise exception 'probe persisted'; end if;
+end $$;
+set local role authenticated;
+select set_config('request.jwt.claims','{"sub":"a9000000-0000-4000-8000-000000000001","role":"authenticated"}',true);
 -- Direct API mutations rejected even for owners.
 select pg_temp.expect_error('insert into public.goods_receipts(id) values(gen_random_uuid())','42501');
 select pg_temp.expect_error('update public.goods_receipts set notes=''x''','42501');
@@ -368,6 +552,24 @@ do $$ declare u uuid; begin
   perform pg_temp.expect_error(format('select pg_temp.receive(%L,%L,''1'')',current_setting('test.gr_open_po'),current_setting('test.gr_line')),'P0002');
  end loop;
 end $$;
+-- Part 2 list/history: other tenant and disabled members see no A receipts,
+-- even with A's organization/PO IDs; B still sees only its own.
+do $$ declare u uuid; begin
+ foreach u in array array['a9000000-0000-4000-8000-000000000002'::uuid,'a9000000-0000-4000-8000-000000000003'::uuid,'a9000000-0000-4000-8000-000000000005'::uuid] loop
+  perform set_config('request.jwt.claims',jsonb_build_object('sub',u,'role','authenticated')::text,true);
+  if exists(select 1 from public.list_goods_receipts(current_setting('test.gr_org')::uuid))
+   or exists(select 1 from public.list_goods_receipts(current_setting('test.gr_org')::uuid,'GR',current_setting('test.gr_list_po')::uuid)) then
+   raise exception 'list isolation %',u;
+  end if;
+ end loop;
+ perform set_config('request.jwt.claims','{"sub":"a9000000-0000-4000-8000-000000000002","role":"authenticated"}',true);
+ -- B's two receipts (Part 1 fixture and the Received By snapshot check), nothing of A's.
+ if (select array_agg(id order by id) from public.list_goods_receipts(current_setting('test.gr_other_org')::uuid))
+    is distinct from (select array_agg(x order by x) from unnest(array[current_setting('test.gr_other_receipt')::uuid,current_setting('test.gr_other_receipt2')::uuid]) x)
+  or (select array_agg(id order by id) from public.list_goods_receipts(current_setting('test.gr_other_org')::uuid,null,current_setting('test.gr_other_po')::uuid))
+    is distinct from (select array_agg(x order by x) from unnest(array[current_setting('test.gr_other_receipt')::uuid,current_setting('test.gr_other_receipt2')::uuid]) x)
+  then raise exception 'B own list'; end if;
+end $$;
 reset role;
 set local role anon;
 select set_config('request.jwt.claims','{"role":"anon"}',true);
@@ -376,6 +578,7 @@ select pg_temp.expect_error('select * from public.goods_receipt_items','42501');
 select pg_temp.expect_error('select public.create_goods_receipt(null,current_date,null,''[]'')','42501');
 select pg_temp.expect_error('select public.get_goods_receipt(null,null)','42501');
 select pg_temp.expect_error('select public.get_purchase_order_receiving_summary(null,null)','42501');
+select pg_temp.expect_error('select * from public.list_goods_receipts(null)','42501');
 reset role;
 set constraints all immediate;
 select 'ALL GOODS RECEIPT CHECKS PASSED' as result;

@@ -507,3 +507,39 @@ Print route rendering bypasses the workspace shell entirely. A dedicated paper-p
 - Filter labels remain visible and compact. Desktop sticky detail/form rails have a viewport-relative height limit and scroll only at widths >=1280px; sticking and the height limit are disabled below 800px viewport height. Mobile rails remain in normal flow.
 - The native mobile drawer exposes expanded state, locks/restores page scroll, returns focus on explicit close/Escape, and closes on navigation/desktop resize. Route changes clear state even when a print route removes the dialog before a close event. Logout feedback uses `useFormStatus` without changing the action. `ConfirmDialog.description` contains only the message; alerts and buttons remain separate.
 - The branding action's only change is success-message copy: supported business documents, rather than a fixed list of document types. No mutation logic, RPC, RLS, SQL, pricing, receiving, payment, selector, payload or snapshot changes.
+
+## 031 — Goods Receiving UI: PO-originated receipts, preview-only rules, private "received by"
+
+Date: 2026-11-07
+Status: accepted
+
+**Context:** Goods Receiving Part 1 (DECISIONS 027/028) is the authoritative backend. Part 2 adds the UI on the shared shell (DECISIONS 030) without changing those rules or adding inventory.
+
+**Decision:**
+
+- **Receipts always start from a purchase order.** Routes: `/purchase-orders/[id]/receive`, `/goods-receipts`, `/goods-receipts/[id]`, `/goods-receipts/[id]/print`. There is no `/goods-receipts/new` and no edit/delete/cancel for any role.
+- **Database stays authoritative; the browser previews.** The receive form and the Server Action share pure helpers (`lib/goods-receipts/receiving.ts`): blank/zero lines omitted, positive exact decimals (max 3 places, BigInt comparison, never JS floats), `<= remaining` from the backend summary, `received_date >= order_date`, no future-date limit, at least one positive line. The browser posts only `{ purchaseOrderItemId, receivedQuantity }` pairs plus date and notes; the action keeps only those fields. `createGoodsReceipt()` now also pre-checks the order date (same rule as GR007) before reading lines.
+- **Stale/concurrent outcomes** (over-receive, line already full, PO no longer receivable, lock/serialization conflicts, changed lines) return one friendly message and revalidate the PO detail and receive pages, which re-render with the latest summary; quantities typed for lines that are no longer open are dropped. No silent retry of a physical event.
+- **One read for lists and history.** `list_goods_receipts()` (invoker, RLS, explicit organization filter, sealed only, Unicode trim, literal wildcards, clamped paging, deterministic newest-received-first order) serves `/goods-receipts` and, with a PO filter, the PO receipt history with item count and total quantity aggregated in SQL (no N+1, no browser aggregation). PO detail reads PO, receiving summary and history in parallel.
+- **Cancellation UX follows the Part 1 rule:** Cancel is hidden once any receipt exists; a stale cancel is still rejected by the database and shown as the existing safe transition message with a refresh.
+- **"Received by" is privacy-preserving.** Superseded by DECISIONS 032: receipts now store a recorder name snapshot instead of the earlier "You" / "Another team member" labels.
+- **No stock wording.** Success says "Goods receipt recorded successfully." Inventory will later consume receipts as stock-in.
+
+**Consequences:** A future Inventory module links receipts to stock movements without changing these screens' write path. Showing member names on receipts requires a deliberate profile-visibility decision (and SQL tests).
+
+## 032 — Goods receipt "Received By" name snapshot; item count instead of cross-unit totals
+
+Date: 2026-11-07
+Status: accepted
+
+**Context:** Receipts are operational/audit documents and must name who recorded them, but profiles are deliberately readable only by their owner. The PO receipt history also summed quantities across different units, which has no business meaning.
+
+**Decision:**
+
+- `goods_receipts.received_by_name` (migration `20261104230000_goods_receipt_received_by_snapshot.sql`) is a snapshot of the recorder's `profiles.full_name` (the name captured at sign-up), trimmed and capped at 200 code points. A private BEFORE INSERT trigger derives it from `created_by` for every insert path (the RPC uses `auth.uid()`), overwriting any supplied value. `created_by` remains the authoritative user reference; no second user column.
+- It is historical receipt content: the existing whole-row immutability trigger prevents any later change (also privileged), and API roles have no write grants. Profile renames, membership disabling or removal do not alter existing receipts. Auth-user deletion of a recorder remains restricted by the existing FK.
+- No profile access is widened. Reads return the stored value only; nothing joins live profiles for display, and the name is not a search target.
+- Staged nullable column: when no trusted name exists (profile without `full_name`), NULL is stored and the UI shows "Name not recorded". Email is not used as a fallback because the product only shows a user's email to that user. Existing receipts are not backfilled: a current profile name is not evidence of the name at receiving time, and backfilling would require disabling the immutability guard. A NOT NULL constraint can be considered once every account is guaranteed a name.
+- `list_goods_receipts()` returns `item_count` (receipt lines) and `received_by_name`; the mixed-unit `total_received_quantity` and raw `created_by` are removed (dropped and recreated with unchanged invoker/RLS/search/paging/order and grants). PO receipt history shows GR number, received date, item count and received by; the main list keeps its Items column.
+
+**Consequences:** Names on receipts are as of recording time by design. Quantity, status, concurrency, sealing, cancellation, service-line, permission and stock behavior are unchanged.

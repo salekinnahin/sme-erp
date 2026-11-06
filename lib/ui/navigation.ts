@@ -1,6 +1,6 @@
 import type { OrganizationFeatureKey } from "@/lib/organizations/feature-keys";
 
-export type NavIcon = "overview" | "customers" | "quotation" | "order" | "invoice" | "vendors" | "purchase" | "products" | "settings";
+export type NavIcon = "overview" | "customers" | "quotation" | "order" | "invoice" | "vendors" | "purchase" | "receipt" | "products" | "settings";
 export type NavItem = { href: string; label: string; icon: NavIcon };
 export type NavGroup = { label: string; items: readonly NavItem[]; feature?: OrganizationFeatureKey };
 
@@ -16,6 +16,7 @@ export const NAVIGATION: readonly NavGroup[] = [
   { label: "Purchases", items: [
     { href: "/vendors", label: "Vendors", icon: "vendors" },
     { href: "/purchase-orders", label: "Purchase orders", icon: "purchase" },
+    { href: "/goods-receipts", label: "Goods receipts", icon: "receipt" },
   ] },
   { label: "Inventory", items: [{ href: "/products", label: "Products", icon: "products" }] },
   // No rental route exists. Even entitled organizations must never see a dead link.
@@ -36,7 +37,7 @@ export function activeNavItem(pathname: string): NavItem | undefined {
 }
 
 export function isDocumentPrintRoute(pathname: string): boolean {
-  return /^\/(quotations|sales-orders|invoices|purchase-orders)\/[^/]+\/print\/?$/.test(pathname);
+  return /^\/(quotations|sales-orders|invoices|purchase-orders|goods-receipts)\/[^/]+\/print\/?$/.test(pathname);
 }
 
 export function organizationInitials(name: string): string {

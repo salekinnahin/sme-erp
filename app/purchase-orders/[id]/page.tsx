@@ -9,7 +9,10 @@ import { getPurchaseOrder } from "@/lib/purchase-orders/purchase-orders";
 import { canEditPurchaseOrder } from "@/lib/purchase-orders/permissions";
 import { purchaseOrderStatusActions } from "@/lib/purchase-orders/status-actions";
 import { formatCalendarDate, formatDateTime, formatMoney } from "@/lib/format";
-import { SECONDARY_LINK, TEXT_LINK } from "@/app/_components/styles";
+import { PRIMARY_LINK, SECONDARY_LINK, TEXT_LINK } from "@/app/_components/styles";
+import { getPurchaseOrderReceivingSummary, listPurchaseOrderGoodsReceipts } from "@/lib/goods-receipts/goods-receipts";
+import { receiveGoodsAction, showsReceivingSummary, withoutCancelAfterReceipt } from "@/lib/goods-receipts/receiving";
+import { ReceiptHistory, ReceivingSummary } from "@/app/goods-receipts/_components/receiving-sections";
 import { PurchaseOrderStatusBadge } from "../_components/purchase-order-status-badge";
 import { PurchaseOrderStatusActions } from "../_components/status-actions";
 
@@ -27,14 +30,21 @@ async function PurchaseOrderDetail({ params }: Pick<PageProps<"/purchase-orders/
   const { id } = await params;
   const tenant = await requireTenant();
   // Null for malformed IDs, unknown IDs and other organizations' orders.
-  const po = await getPurchaseOrder(tenant, id);
+  // Receiving reads are tenant-filtered too and run in parallel (no N+1).
+  const [po, lines, receipts] = await Promise.all([
+    getPurchaseOrder(tenant, id),
+    getPurchaseOrderReceivingSummary(tenant, id),
+    listPurchaseOrderGoodsReceipts(tenant, id),
+  ]);
   if (!po) notFound();
 
   const tz = tenant.organization.timezone;
   const money = (amount: string) => formatMoney(amount, tenant.organization.currency);
   const canEdit = canEditPurchaseOrder(tenant.role, po.status);
-  // Order / cancel only; receiving statuses are never user actions.
-  const actions = purchaseOrderStatusActions(tenant.role, po.status);
+  // Order / cancel only; receiving statuses are never user actions. Any
+  // goods receipt prevents cancellation (the database enforces it too).
+  const actions = withoutCancelAfterReceipt(purchaseOrderStatusActions(tenant.role, po.status), receipts.total);
+  const receive = receiveGoodsAction(tenant.role, po.status, lines);
 
   return (
     <div className="space-y-6">
@@ -43,6 +53,11 @@ async function PurchaseOrderDetail({ params }: Pick<PageProps<"/purchase-orders/
       </Link>
 
       <PageHeader title={<span className="font-mono">{po.purchaseOrderNumber}</span>} description={po.vendorName} badge={<PurchaseOrderStatusBadge status={po.status} />} actions={<>
+        {receive && (
+          <Link href={`/purchase-orders/${po.id}/receive`} className={PRIMARY_LINK}>
+            {receive.label}
+          </Link>
+        )}
         {canEdit && (
           <Link href={`/purchase-orders/${po.id}/edit`} className={SECONDARY_LINK}>
             Edit
@@ -84,6 +99,12 @@ async function PurchaseOrderDetail({ params }: Pick<PageProps<"/purchase-orders/
               Open vendor record
             </Link>
           </SectionCard>
+          {showsReceivingSummary(po.status) && (
+            <>
+              <ReceivingSummary lines={lines} />
+              <ReceiptHistory items={receipts.items} total={receipts.total} purchaseOrderNumber={po.purchaseOrderNumber} />
+            </>
+          )}
           <DocumentItems items={po.items} currency={tenant.organization.currency} />
           <SectionCard title="Notes">
             <p className="mt-1 whitespace-pre-line break-words">
