@@ -1,5 +1,27 @@
 # Current Task
 
+## Purchase Order Management – Part 1
+
+Implemented the secure Vendor → Purchase Order database/domain foundation (DECISIONS 026). No PO UI, Goods Receiving, inventory quantities/movements/reservations, supplier bills/payments or accounting.
+
+- New migration `20261104180000_purchase_orders.sql`, after every migration through `20261104170000_organization_features.sql`; historical migrations unchanged. Adds header/items, tenant-safe composite vendor key, counter type, RLS, private helpers, three write RPCs and a one-statement invoker read RPC.
+- Exact quotation calculation helpers reused. New products default from purchase_price; historical vendor/product snapshots survive master edits/deactivation. Draft line IDs are one-save edit tokens; original-product re-selection restores recorded snapshots/price for future UI.
+- All active roles create/edit/order; owner/manager cancel. Receiving states are reserved for future Goods Receiving; received/cancelled terminal. Non-drafts commercially immutable; DELETE blocked in every status, including privileged tools and organization cascades. PO operations never affect stock.
+- Focused Vitest and `supabase/tests/purchase_orders.sql`; all requested docs updated.
+
+### Verification (local only)
+
+- [x] `npm test`: 747 passed, 49 files (46 purchase order tests)
+- [x] `npm run lint`: no warnings/errors after cleanup
+- [x] `npx tsc --noEmit`
+- [x] All 19 migrations apply and all nine SQL suites pass in local PGlite PostgreSQL with simulated Supabase Auth/API roles/default grants: tenant isolation, customers, vendors, products, quotations, sales orders, invoices, organization features, purchase orders
+- [ ] `npm run build`: existing Turbopack worker port-binding failure (`Operation not permitted`), reproduced in sandbox and escalated retry
+- [ ] Native local Supabase/PostgREST and two-session concurrency checks remain manual; embedded SQL tests do not exercise actual lock waiting
+- [ ] Manual deployment only: apply any missing earlier migrations in filename order through `20261104170000`, then `20261104180000_purchase_orders.sql`; run all SQL suites independently. No remote connection, commit or push performed.
+- No product decisions require input. Future receiving will tighten cancellation once goods are received and become the inventory stock-in source.
+
+## Previous tasks and outstanding manual checks
+
 ## Organization Feature Entitlements
 
 Implemented the platform foundation only (DECISIONS 025). Initial approved key: `rentals`. No Rental module, navigation, admin UI, billing, or new dependencies.

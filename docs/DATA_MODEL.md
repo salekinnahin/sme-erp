@@ -360,7 +360,6 @@ Draft line IDs are not durable (same rule as sales orders, DECISIONS 022/023): a
 
 | Table | Notes |
 | --- | --- |
-| `purchase_orders`, `purchase_order_lines` | |
 | `goods_receipts`, `goods_receipt_lines` | Receiving creates stock movements |
 | `supplier_bills`, `supplier_bill_lines` | |
 | `supplier_payments` | One row per payment transaction. No overpayment |
@@ -403,3 +402,30 @@ A named CHECK `organization_features_feature_key_check` allows only `rentals`. A
 Unique `(organization_id, feature_key)` gives one entitlement per feature and indexes organization reads. Unique `(organization_id, id)` supports tenant-safe composite foreign keys from future tenant-owned tables. The link to the root organization itself uses its primary key, as existing tenant tables do; no redundant composite root relationship is needed.
 
 No row, or `enabled = false`, means disabled. Nothing is seeded or enabled for existing or newly created organizations. Authenticated active members can SELECT only `organization_id`, `feature_key`, `enabled` of their own organizations. Activation actor/timestamps and record metadata are platform-only. There are no organization-user write grants or write policies. `has_org_feature(uuid, text)` returns a boolean under invoker RLS and active membership, never another organization's configuration.
+
+### `purchase_orders` (Part 1 implemented)
+
+Migration: `20261104180000_purchase_orders.sql` (DECISIONS 026).
+
+- `id`: UUID primary key; `organization_id`: required organization FK. Unique `(organization_id, id)` and `(organization_id, purchase_order_number)`.
+- `purchase_order_number`: database-generated `PO-` plus at least six digits, from the organization-scoped transactional `purchase_order` counter.
+- `vendor_id`: required composite `(organization_id, vendor_id)` FK to vendors. Adds vendors' `(organization_id, id)` unique key.
+- Historical vendor snapshot: required `vendor_name`; nullable `vendor_company_name`, `vendor_phone`, `vendor_email`, `vendor_address`, `vendor_tax_number`.
+- `order_date`: required finite date; `expected_delivery_date`: nullable finite date on/after order_date. Date-only semantics.
+- `status`: draft (default), ordered, partially_received, received, cancelled. Only ordered/cancelled are user targets; receiving states are reserved for Goods Receiving. Received/cancelled are terminal.
+- `notes`: nullable trimmed 1–2000 code points.
+- `subtotal`, `discount_total`, `tax_total`, `grand_total`: numeric(18,2), nonnegative, calculated from persisted lines; grand_total = subtotal − discount_total + tax_total.
+- `created_by`: authenticated creator, nullable FK to Auth users with deletion nullification; `created_at`, `updated_at`: timestamps, updated_at trigger-managed.
+- Indexes: organization/created timestamp+ID, organization/status/created timestamp+ID, organization/order_date, organization/vendor, creator. Number uniqueness supplies the organization/number index.
+
+### `purchase_order_items` (Part 1 implemented)
+
+- `id`: UUID primary key. `organization_id`, `purchase_order_id`, `product_id`: required; composite tenant-safe FKs to header and products. Organization/header cascade cannot remove a PO because its delete trigger rejects DELETE first.
+- Snapshots: required `product_name`, `sku`, `unit`; nullable trimmed `description` up to 2000 code points.
+- `quantity`: numeric(18,3), positive; `unit_price`, `discount_amount`, `tax_amount`, `line_total`: numeric(18,2); `tax_rate`: numeric(5,2), 0–100.
+- Line gross = round(quantity × unit_price, 2); taxable = gross − discount; tax = round(taxable × tax_rate / 100, 2); line_total = taxable + tax. Discount is nonnegative and cannot exceed gross. SQL numeric is authoritative; TypeScript uses the shared exact decimal model.
+- `sort_order`: 1–100, unique within organization/header; timestamps; organization/product index. Read items by sort_order then id. Writes accept 1–100 items atomically.
+
+New active products of all types default to purchase_price, never selling_price; explicit price is required if absent. Unchanged vendor/kept product references preserve historical snapshots even when inactive. Changing a reference requires active master data and new snapshots. Omitted kept-line price/description use recorded defaults; explicit commercial values remain editable in draft. Item IDs are temporary edit tokens replaced at save; unknown/repeated/foreign IDs fail. Original-product re-selection restores its recorded snapshot/description/unit/PO price in future UI.
+
+RLS permits active tenant members to read; authenticated clients have no direct writes. Three checked write RPCs control mutations. `get_purchase_order` returns one consistent document and exact decimal strings. Non-drafts are commercially immutable. All purchase orders reject hard deletion, even by privileged writers; organization deletion may fail. Purchase orders have no stock effect. Goods Receiving will provide inventory stock-in and receiving-state changes, and tighten cancellation after goods are received.

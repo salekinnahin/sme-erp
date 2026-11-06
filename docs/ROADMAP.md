@@ -42,7 +42,8 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 
 ## Phase 5 — Purchasing
 
-- [ ] Purchase orders
+- [x] Purchase orders — Part 1 database/domain foundation (DECISIONS 026): vendor/product snapshots, purchase-price defaults, exact totals, PO numbering, draft edits, order/cancel, receiving-status reservation, RLS and tests. No stock effects.
+- [ ] Purchase orders — Part 2 UI
 - [ ] Goods receiving
 - [ ] Supplier bills
 - [ ] Supplier payments
