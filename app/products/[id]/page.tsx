@@ -1,3 +1,4 @@
+import { PageHeader, SectionCard, MetadataList, MetadataItem, PageSkeleton } from "@/app/_components/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -19,7 +20,7 @@ export const metadata: Metadata = { title: "Product · SME ERP" };
 
 export default function ProductPage({ params }: PageProps<"/products/[id]">) {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+    <Suspense fallback={<PageSkeleton label="Loading…" />}>
       <ProductDetail params={params} />
     </Suspense>
   );
@@ -45,33 +46,22 @@ async function ProductDetail({
         ← Products
       </Link>
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold break-all">{product.name}</h1>
-            <StatusBadge status={product.status} />
-          </div>
-          <p className="mt-1 font-mono text-sm text-zinc-600 dark:text-zinc-400">
-            {product.sku}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-start gap-2">
-          {canEdit && (
-            <Link href={`/products/${product.id}/edit`} className={SECONDARY_LINK}>
-              Edit
-            </Link>
-          )}
-          {canChangeStatus && (
-            // key resets the confirmation step after the status changes
-            <StatusActions
-              key={product.status}
-              productId={product.id}
-              productName={product.name}
-              status={product.status}
-            />
-          )}
-        </div>
-      </div>
+      <PageHeader title={product.name} description={product.sku} badge={<StatusBadge status={product.status} />} actions={<>
+        {canEdit && (
+          <Link href={`/products/${product.id}/edit`} className={SECONDARY_LINK}>
+            Edit
+          </Link>
+        )}
+        {canChangeStatus && (
+          // key resets the confirmation step after the status changes
+          <StatusActions
+            key={product.status}
+            productId={product.id}
+            productName={product.name}
+            status={product.status}
+          />
+        )}
+      </>} />
 
       {product.status === "inactive" && (
         <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
@@ -80,49 +70,30 @@ async function ProductDetail({
         </p>
       )}
 
-      <dl className="grid gap-x-6 gap-y-4 rounded-xl border border-zinc-200 bg-white p-6 sm:grid-cols-2 dark:border-zinc-800 dark:bg-zinc-950">
-        <Item label="Product name">{product.name}</Item>
-        <Item label="SKU">{product.sku}</Item>
-        <Item label="Product type">{PRODUCT_TYPE_LABELS[product.productType]}</Item>
-        <Item label="Category">{product.categoryName}</Item>
-        <Item label="Unit">{PRODUCT_UNIT_LABELS[product.unit]}</Item>
-        <Item label="Status">{product.status === "active" ? "Active" : "Inactive"}</Item>
-        <Item label="Purchase price">
+      <SectionCard title="Product details"><MetadataList>
+        <MetadataItem label="Product name">{product.name}</MetadataItem>
+        <MetadataItem label="SKU">{product.sku}</MetadataItem>
+        <MetadataItem label="Product type">{PRODUCT_TYPE_LABELS[product.productType]}</MetadataItem>
+        <MetadataItem label="Category">{product.categoryName}</MetadataItem>
+        <MetadataItem label="Unit">{PRODUCT_UNIT_LABELS[product.unit]}</MetadataItem>
+        <MetadataItem label="Status">{product.status === "active" ? "Active" : "Inactive"}</MetadataItem>
+        <MetadataItem label="Purchase price">
           {product.purchasePrice !== null && formatMoney(product.purchasePrice, currency)}
-        </Item>
-        <Item label="Selling price">
+        </MetadataItem>
+        <MetadataItem label="Selling price">
           {product.sellingPrice !== null && formatMoney(product.sellingPrice, currency)}
-        </Item>
+        </MetadataItem>
         {hasReorderLevel(product.productType) && (
-          <Item label="Reorder level">
+          <MetadataItem label="Reorder level">
             {`${formatQuantity(product.reorderLevel)} ${product.unit}`}
-          </Item>
+          </MetadataItem>
         )}
-        <Item label="Description" wide>
+        <MetadataItem label="Description" wide>
           {product.description}
-        </Item>
-        <Item label="Created">{formatDateTime(product.createdAt, tz)}</Item>
-        <Item label="Last updated">{formatDateTime(product.updatedAt, tz)}</Item>
-      </dl>
-    </div>
-  );
-}
-
-function Item({
-  label,
-  wide,
-  children,
-}: {
-  label: string;
-  wide?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={wide ? "sm:col-span-2" : undefined}>
-      <dt className="text-sm font-medium text-zinc-500 dark:text-zinc-400">{label}</dt>
-      <dd className="mt-1 whitespace-pre-line break-words text-zinc-900 dark:text-zinc-50">
-        {children || <span className="text-zinc-400">—</span>}
-      </dd>
+        </MetadataItem>
+        <MetadataItem label="Created">{formatDateTime(product.createdAt, tz)}</MetadataItem>
+        <MetadataItem label="Last updated">{formatDateTime(product.updatedAt, tz)}</MetadataItem>
+      </MetadataList></SectionCard>
     </div>
   );
 }

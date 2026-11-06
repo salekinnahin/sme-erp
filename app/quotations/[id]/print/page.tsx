@@ -4,11 +4,12 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { requireTenant } from "@/lib/tenancy/context";
 import { getQuotation } from "@/lib/quotations/quotations";
-import { getOrganizationDetails } from "@/lib/organizations/details";
+import { getOrganizationBranding } from "@/lib/organizations/branding";
 import { QUOTATION_STATUS_LABELS } from "@/lib/quotations/validation";
 import { formatCalendarDate, formatMoney, formatQuantity, plainDecimal } from "@/lib/format";
 import { TEXT_LINK } from "@/app/_components/styles";
 import { PrintButton } from "@/app/_components/print-button";
+import { DocumentBrandHeader } from "@/app/_components/document-brand-header";
 
 export const metadata: Metadata = { title: "Print quotation · SME ERP" };
 
@@ -16,7 +17,8 @@ export const metadata: Metadata = { title: "Print quotation · SME ERP" };
  * Browser print view. App chrome (header, navigation) and the toolbar are
  * hidden when printing (print:hidden, globals.css @media print). The
  * document itself always uses dark-on-white "paper" colors, whatever the
- * screen color scheme. Values come from the quotation's snapshot only.
+ * screen color scheme. Values come from the quotation's snapshot only;
+ * the letterhead is the organization's live branding (DECISIONS 029).
  * Browser Print → Save as PDF gives a PDF; there is no PDF library.
  */
 export default function PrintQuotationPage({ params }: PageProps<"/quotations/[id]/print">) {
@@ -32,7 +34,7 @@ async function PrintQuotation({ params }: Pick<PageProps<"/quotations/[id]/print
   const tenant = await requireTenant();
   const quotation = await getQuotation(tenant, id);
   if (!quotation) notFound();
-  const org = await getOrganizationDetails(tenant);
+  const branding = await getOrganizationBranding(tenant);
 
   const money = (amount: string) => formatMoney(amount, tenant.organization.currency);
 
@@ -53,32 +55,18 @@ async function PrintQuotation({ params }: Pick<PageProps<"/quotations/[id]/print
       </div>
 
       <article className="mx-auto max-w-4xl bg-white p-8 text-sm text-zinc-900 shadow-sm ring-1 ring-zinc-200 sm:p-12 print:max-w-none print:p-0 print:shadow-none print:ring-0">
-        <header className="flex flex-wrap items-start justify-between gap-6 border-b border-zinc-300 pb-6">
-          <div className="max-w-sm space-y-0.5 break-words">
-            <p className="text-lg font-semibold">{org.name}</p>
-            {org.address && <p className="whitespace-pre-line">{org.address}</p>}
-            {org.phone && <p>{org.phone}</p>}
-            {org.email && <p>{org.email}</p>}
-            {org.taxNumber && <p>Tax number: {org.taxNumber}</p>}
-          </div>
-          <div className="text-right">
-            <h1 className="text-2xl font-semibold tracking-wide uppercase">Quotation</h1>
-            <dl className="mt-2 grid grid-cols-[auto_auto] justify-end gap-x-4 gap-y-0.5">
-              <dt className="text-zinc-600">Number</dt>
-              <dd className="font-mono font-medium">{quotation.quotationNumber}</dd>
-              <dt className="text-zinc-600">Date</dt>
-              <dd>{formatCalendarDate(quotation.quotationDate)}</dd>
-              <dt className="text-zinc-600">Valid until</dt>
-              <dd>{quotation.expiryDate ? formatCalendarDate(quotation.expiryDate) : "—"}</dd>
-              {quotation.status !== "sent" && (
-                <>
-                  <dt className="text-zinc-600">Status</dt>
-                  <dd>{QUOTATION_STATUS_LABELS[quotation.status]}</dd>
-                </>
-              )}
-            </dl>
-          </div>
-        </header>
+        <DocumentBrandHeader
+          branding={branding}
+          title="Quotation"
+          number={quotation.quotationNumber}
+          meta={[
+            { label: "Date", value: formatCalendarDate(quotation.quotationDate) },
+            { label: "Valid until", value: quotation.expiryDate ? formatCalendarDate(quotation.expiryDate) : "—" },
+            ...(quotation.status !== "sent"
+              ? [{ label: "Status", value: QUOTATION_STATUS_LABELS[quotation.status] }]
+              : []),
+          ]}
+        />
 
         <section className="mt-6 break-words">
           <h2 className="text-xs font-semibold tracking-wide text-zinc-600 uppercase">Quotation for</h2>

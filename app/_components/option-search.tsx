@@ -144,14 +144,14 @@ export function OptionSearch<T extends { id: string }>({
         onBlur={close}
         onChange={(e) => startQuery(e.target.value, SEARCH_DELAY_MS, "query")}
         onKeyDown={onKeyDown}
-        className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300"
+        className="ui-input mt-1"
       />
       {open && (
         <div
           // Keep focus in the input while clicking a result, so blur does
           // not close the list before the click lands.
           onMouseDown={(e) => e.preventDefault()}
-          className="absolute z-20 mt-1 w-full overflow-hidden rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+          className="option-dropdown"
         >
           <ul id={listId} role="listbox" className="max-h-72 overflow-auto py-1">
             {results.map((option, index) => {
@@ -168,9 +168,8 @@ export function OptionSearch<T extends { id: string }>({
                     if (current !== undefined) choose(current);
                   }}
                   onMouseEnter={() => dispatch({ type: "highlight", index })}
-                  className={`cursor-pointer px-3 py-2 text-sm ${
-                    index === active ? "bg-zinc-100 dark:bg-zinc-800" : ""
-                  } ${option.id === selectedId ? "font-medium" : ""}`}
+                  data-highlighted={index === active}
+                  className="cursor-pointer text-sm"
                 >
                   <span className="block">{optionLabel(option)}</span>
                   {detail && <span className="block text-xs text-zinc-500">{detail}</span>}

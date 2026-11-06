@@ -4,11 +4,12 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { requireTenant } from "@/lib/tenancy/context";
 import { getPurchaseOrder } from "@/lib/purchase-orders/purchase-orders";
-import { getOrganizationDetails } from "@/lib/organizations/details";
+import { getOrganizationBranding } from "@/lib/organizations/branding";
 import { PURCHASE_ORDER_STATUS_LABELS } from "@/lib/purchase-orders/validation";
 import { formatCalendarDate, formatMoney, formatQuantity, plainDecimal } from "@/lib/format";
 import { TEXT_LINK } from "@/app/_components/styles";
 import { PrintButton } from "@/app/_components/print-button";
+import { DocumentBrandHeader } from "@/app/_components/document-brand-header";
 
 export const metadata: Metadata = { title: "Print purchase order · SME ERP" };
 
@@ -16,7 +17,8 @@ export const metadata: Metadata = { title: "Print purchase order · SME ERP" };
  * Browser print view (same layout rules as the invoice print view). App
  * chrome and the toolbar are hidden when printing. The document always uses
  * dark-on-white "paper" colors. Order values come from the purchase order's
- * snapshot only; the letterhead is the organization's current details.
+ * snapshot only; the letterhead is the organization's live branding (logo
+ * and details, DECISIONS 029).
  * Browser Print → Save as PDF gives a PDF; there is no PDF library.
  */
 export default function PrintPurchaseOrderPage({ params }: PageProps<"/purchase-orders/[id]/print">) {
@@ -32,7 +34,7 @@ async function PrintPurchaseOrder({ params }: Pick<PageProps<"/purchase-orders/[
   const tenant = await requireTenant();
   const po = await getPurchaseOrder(tenant, id);
   if (!po) notFound();
-  const org = await getOrganizationDetails(tenant);
+  const branding = await getOrganizationBranding(tenant);
 
   const money = (amount: string) => formatMoney(amount, tenant.organization.currency);
 
@@ -53,28 +55,19 @@ async function PrintPurchaseOrder({ params }: Pick<PageProps<"/purchase-orders/[
       </div>
 
       <article className="mx-auto max-w-4xl bg-white p-8 text-sm text-zinc-900 shadow-sm ring-1 ring-zinc-200 sm:p-12 print:max-w-none print:p-0 print:shadow-none print:ring-0">
-        <header className="flex flex-wrap items-start justify-between gap-6 border-b border-zinc-300 pb-6">
-          <div className="max-w-sm space-y-0.5 break-words">
-            <p className="text-lg font-semibold">{org.name}</p>
-            {org.address && <p className="whitespace-pre-line">{org.address}</p>}
-            {org.phone && <p>{org.phone}</p>}
-            {org.email && <p>{org.email}</p>}
-            {org.taxNumber && <p>Tax number: {org.taxNumber}</p>}
-          </div>
-          <div className="text-right">
-            <h1 className="text-2xl font-semibold tracking-wide uppercase">Purchase order</h1>
-            <dl className="mt-2 grid grid-cols-[auto_auto] justify-end gap-x-4 gap-y-0.5">
-              <dt className="text-zinc-600">Number</dt>
-              <dd className="font-mono font-medium">{po.purchaseOrderNumber}</dd>
-              <dt className="text-zinc-600">Order date</dt>
-              <dd>{formatCalendarDate(po.orderDate)}</dd>
-              <dt className="text-zinc-600">Expected delivery</dt>
-              <dd>{po.expectedDeliveryDate ? formatCalendarDate(po.expectedDeliveryDate) : "—"}</dd>
-              <dt className="text-zinc-600">Status</dt>
-              <dd>{PURCHASE_ORDER_STATUS_LABELS[po.status]}</dd>
-            </dl>
-          </div>
-        </header>
+        <DocumentBrandHeader
+          branding={branding}
+          title="Purchase order"
+          number={po.purchaseOrderNumber}
+          meta={[
+            { label: "Order date", value: formatCalendarDate(po.orderDate) },
+            {
+              label: "Expected delivery",
+              value: po.expectedDeliveryDate ? formatCalendarDate(po.expectedDeliveryDate) : "—",
+            },
+            { label: "Status", value: PURCHASE_ORDER_STATUS_LABELS[po.status] },
+          ]}
+        />
 
         <section className="mt-6 break-words">
           <h2 className="text-xs font-semibold tracking-wide text-zinc-600 uppercase">Vendor</h2>

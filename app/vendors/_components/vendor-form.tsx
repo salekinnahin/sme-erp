@@ -1,5 +1,6 @@
 "use client";
 
+import { FormSection } from "@/app/_components/ui";
 import Link from "next/link";
 import { useActionState } from "react";
 import { Alert, Field, SubmitButton, TextArea } from "@/app/auth/_components/ui";
@@ -44,6 +45,7 @@ export function VendorForm({
   return (
     <form action={formAction} noValidate className="space-y-4">
       {state.error && <Alert kind="error">{state.error}</Alert>}
+      <FormSection title="Contact information">
       <Field
         label="Vendor name"
         name="name"
@@ -77,6 +79,8 @@ export function VendorForm({
           error={fe.email}
         />
       </div>
+      </FormSection>
+      <FormSection title="Address and business details">
       <TextArea
         label="Address"
         name="address"
@@ -99,10 +103,11 @@ export function VendorForm({
         defaultValue={v?.notes}
         error={fe.notes}
       />
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+      </FormSection>
+      <div className="form-actions">
         <Link
           href={cancelHref}
-          className="text-center text-sm text-zinc-600 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+          className="ui-button ui-button-secondary"
         >
           Cancel
         </Link>

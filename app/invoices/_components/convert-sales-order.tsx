@@ -7,9 +7,8 @@ import { PRIMARY_LINK, SECONDARY_LINK } from "@/app/_components/styles";
 import type { ConversionView } from "@/lib/invoices/conversion";
 import type { ConversionFormState } from "@/lib/invoices/messages";
 
-const INPUT =
-  "mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
-const LABEL = "block text-sm font-medium text-zinc-700 dark:text-zinc-300";
+const INPUT = "ui-input mt-1";
+const LABEL = "ui-label";
 
 /** Sales order conversion. Only dates are entered; the database copies snapshots.
  * Keep action errors visible if a concurrent conversion changes the view.
@@ -18,12 +17,15 @@ export function ConvertSalesOrder({
   action,
   view,
   today,
+  compact = false,
 }: {
   /** convertSalesOrderAction bound to the sales order ID by the page. */
   action: (state: ConversionFormState, formData: FormData) => Promise<ConversionFormState>;
   view: ConversionView;
   /** Today in the organization's time zone (YYYY-MM-DD). */
   today: string;
+  /** Compact controls for the document PageHeader; the same form and action state. */
+  compact?: boolean;
 }) {
   const [state, formAction] = useActionState<ConversionFormState, FormData>(action, {});
   const [open, setOpen] = useState(false);
@@ -34,14 +36,14 @@ export function ConvertSalesOrder({
   if (view.kind === "hidden" && !state.error) return null;
 
   return (
-    <section className="space-y-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className={compact ? "document-conversion space-y-3" : "space-y-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"}>
       {state.error && <Alert kind="error">{state.error}</Alert>}
 
       {view.kind === "view" && (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-zinc-700 dark:text-zinc-300">
+          {!compact && <p className="text-sm text-zinc-700 dark:text-zinc-300">
             Converted to invoice <span className="font-mono font-medium">{view.invoiceNumber}</span>.
-          </p>
+          </p>}
           <Link href={`/invoices/${view.invoiceId}`} className={SECONDARY_LINK}>
             View invoice
           </Link>
@@ -50,9 +52,9 @@ export function ConvertSalesOrder({
 
       {view.kind === "create" && !open && (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-zinc-700 dark:text-zinc-300">
+          {!compact && <p className="text-sm text-zinc-700 dark:text-zinc-300">
             This sales order is confirmed. Create a draft invoice with its customer and items.
-          </p>
+          </p>}
           <button type="button" className={PRIMARY_LINK} onClick={() => setOpen(true)}>
             Create invoice
           </button>

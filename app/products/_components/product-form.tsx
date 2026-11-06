@@ -1,5 +1,6 @@
 "use client";
 
+import { FormSection } from "@/app/_components/ui";
 import Link from "next/link";
 import { useActionState, useState } from "react";
 import { Alert, Field, SubmitButton, TextArea } from "@/app/auth/_components/ui";
@@ -27,9 +28,8 @@ const EMPTY: ProductRawInput = {
   reorderLevel: "",
 };
 
-const INPUT =
-  "mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
-const LABEL = "block text-sm font-medium text-zinc-700 dark:text-zinc-300";
+const INPUT = "ui-input mt-1";
+const LABEL = "ui-label";
 
 /**
  * Create / edit form. The Server Action validates everything again; this
@@ -74,6 +74,7 @@ export function ProductForm({
   return (
     <form action={formAction} noValidate className="space-y-4">
       {state.error && <Alert kind="error">{state.error}</Alert>}
+      <FormSection title="Product information">
       <Field label="Product name" name="name" defaultValue={v.name} error={fe.name} />
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
@@ -125,6 +126,8 @@ export function ProductForm({
           error={fe.unit}
         />
       </div>
+      </FormSection>
+      <FormSection title="Pricing and reorder level">
       <div className="grid gap-4 sm:grid-cols-2">
         <DecimalField
           label={`Purchase price (${currency})`}
@@ -149,6 +152,8 @@ export function ProductForm({
           hint="Stock level at which to reorder. Leave blank for 0. Stock tracking comes later."
         />
       )}
+      </FormSection>
+      <FormSection title="Description">
       <TextArea
         label="Description"
         name="description"
@@ -157,10 +162,11 @@ export function ProductForm({
         defaultValue={v.description}
         error={fe.description}
       />
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+      </FormSection>
+      <div className="form-actions">
         <Link
           href={cancelHref}
-          className="text-center text-sm text-zinc-600 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+          className="ui-button ui-button-secondary"
         >
           Cancel
         </Link>

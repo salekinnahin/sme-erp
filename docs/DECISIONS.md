@@ -457,3 +457,53 @@ Cheap finite-date, notes, array/count, UUID shape, duplicate-ID and positive dec
 Statement-level BEFORE TRUNCATE triggers protect goods_receipts, goods_receipt_items, purchase_orders and purchase_order_items with SQLSTATE `55000`, `immutable purchase documents cannot be truncated`. No production trigger is disabled for testing. The cancellation regression assembles an unsealed receipt while the PO is still ordered and checks the exact receipt-specific cancellation error. SQL also verifies privileged sealing, mismatch rejection, 100 → 70 + rejected 31 with unchanged receipt/items/counter/summary, same/later dates and early-date rejection. TypeScript behavior is unchanged; SQL trigger rules are not duplicated in Vitest.
 
 **Consequences:** Unsealed assembly is transient and does not count as completed receiving; item over-receive checks still include all assembled quantities. Database owners can deliberately disable triggers, which is outside normal supported writes. No receiving UI or inventory is introduced.
+
+## 029 — Organization branding: live logo in a private bucket
+
+Date: 2026-11-06
+Status: accepted
+
+**Context:** Printed quotations and sales orders need the company logo. The organization table had an unused `logo_url` column with no write path. Storage was not used yet.
+
+**Decision:**
+
+- **Live, not snapshotted.** Branding (logo, name, address, phone, email, tax number) is current organization data. Old documents reprint with the current logo; document-level logo snapshots are out of scope for V1. Document business snapshots (customer, lines, totals) are unchanged.
+- **Private bucket + server-signed URLs (Option A).** Bucket `organization-branding`, created by the migration with a 2 MiB limit and PNG/JPEG/WebP allowlist. Pages sign a 1-hour URL at render time; print views are dynamic per request, so this stays simple and reliable, and logos are not publicly enumerable. No URL is stored.
+- **One fixed object key per organization**, `organizations/<id>/logo`, without an extension. Replacing overwrites the same key (no abandoned files); the content type is stored with the object. Remove clears the database pointer first, then deletes the object best-effort (a leftover is overwritten by the next upload and is visible to members only).
+- **Owner and manager** upload/replace/remove; employees view. Enforced by the Server Action, the domain function, Storage RLS and the RPCs. Not a feature entitlement.
+- **Upload through a Server Action** using the user's session (no service role), so the server can validate the actual bytes (signature-detected format, size, 16–4096 px) before Storage sees them. Server Actions accept up to 3 MB bodies for this.
+- **No SVG** until an SVG sanitizing policy exists. **No website** field is added (none exists).
+- `logo_url` is dropped; the migration refuses if any row has a value.
+- Logo rendering uses a plain `<img>` in a fixed box (not `next/image`, whose optimizer would need remote patterns and cannot usefully cache short-lived signed URLs); it hides itself if loading fails.
+
+**Consequences:** Changing the logo changes every reprint, including historical documents; a future requirement to reproduce the exact historical letterhead needs document-level snapshots. Follow-up (same day): invoice and purchase order prints also use `DocumentBrandHeader`; goods receipts and supplier bills can reuse it later. A print page left open longer than an hour keeps its already-loaded image, but a reload re-signs it.
+
+
+## 030 — Shared light workspace shell and presentation primitives
+
+Date: 2026-11-06
+Status: accepted
+
+**Decision:** Replace the horizontal application header with a shared grouped sidebar and compact topbar across all implemented modules. Retain module route locations and existing server-page/action/domain/database boundaries. Request-time identity and private branding load server-side inside Suspense; only navigation/dialog interactions require client state. Root error handling covers the new request-time layouts. No dependency, database, RPC, RLS, calculation, permission, snapshot, status-transition or entitlement behavior changes.
+
+The route registry is shared by desktop and mobile navigation. Only actual routes are registered; empty or non-entitled optional groups are omitted. Rental remains invisible because no Rental route exists, regardless of entitlement. Avoid querying entitlements purely to render an empty group. A future real module must supply a server-verified entitlement and enforce eligibility independently at its entry points and database layer.
+
+Use Tailwind v4 plus semantic CSS tokens/classes and small reusable page, card, filter, table, metadata, document-item and money-summary components. The repository has no shadcn setup; do not introduce a second design framework. Preserve URL-driven GET filters and server pagination. Show no fabricated analytics or new aggregate queries. Light mode is deliberate; no OS-driven dark palette or theme-switching infrastructure is added.
+
+Document/detail and form layouts share a main region and desktop summary rail, stacking on smaller screens. Display existing authoritative amounts; previews continue using the same exact-decimal helpers. Preserve line tokens, inactive references, A → B → A restoration and selector-generation guards. Centralized badge tones change only visual presentation, including neutral expired quotations.
+
+Native HTML dialogs provide modal keyboard behavior without a UI library. Confirmation content stays inside the original action form, including hidden IDs/status, so pending state and server validation remain intact. Cancellation/back receives initial focus; errors are available inside an open modal. Organization avatars use bounded private logos with initials fallback. Logo management roles and read-only organization details are unchanged.
+
+Print route rendering bypasses the workspace shell entirely. A dedicated paper-preview wrapper preserves the previous preview spacing and document font; print media removes wrapper spacing. Application table and heading selectors cannot affect print content. The existing four print page sources and DocumentBrandHeader are retained.
+
+**Consequences:** New module screens should use the shared page/layout primitives and register their implemented route once. Future optional modules still require server/database authorization. No Goods Receiving, stock, payments, analytics or Rental UI is included. New UI tests render synthetic data locally; signed-in integration and real Storage tests remain the earlier tasks' manual checks. No remote Supabase connection, commit or push is part of this task.
+
+
+### UI review follow-up — 2026-11-06
+
+- Error recovery uses the installed Next.js 16.4.5 `retry` prop, which refreshes server data and resets the boundary. Its runtime/types no longer expose `unstable_retry` (stabilized in 16.3). The user confirmed using the installed API after this discrepancy was verified locally. Raw production error details remain hidden by `TenantLoadError`.
+- `getOrganizationBranding` is wrapped in module-scope React server `cache()`. All six render callers pass the unchanged object returned by `requireTenant()`, which returns `getTenant()`'s request-cached object. This stable reference is verified using the installed server React cache and the real tenant resolver in a simulated request dispatcher. Organization reads and private URL signing deduplicate per request; there is no persistent URL cache, session bypass or changed Storage/write behavior.
+- Existing document status components live in `PageHeader.actions`, together with Edit/Print and sales-order Create/View Invoice controls. The summary rail holds information only. Permission/transition helpers are unchanged. Quotation action state now survives refreshed statuses like the other documents; its confirmation resets without a status key discarding safe errors.
+- Filter labels remain visible and compact. Desktop sticky detail/form rails have a viewport-relative height limit and scroll only at widths >=1280px; sticking and the height limit are disabled below 800px viewport height. Mobile rails remain in normal flow.
+- The native mobile drawer exposes expanded state, locks/restores page scroll, returns focus on explicit close/Escape, and closes on navigation/desktop resize. Route changes clear state even when a print route removes the dialog before a close event. Logout feedback uses `useFormStatus` without changing the action. `ConfirmDialog.description` contains only the message; alerts and buttons remain separate.
+- The branding action's only change is success-message copy: supported business documents, rather than a fixed list of document types. No mutation logic, RPC, RLS, SQL, pricing, receiving, payment, selector, payload or snapshot changes.

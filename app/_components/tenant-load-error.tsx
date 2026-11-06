@@ -30,11 +30,12 @@ export function TenantLoadError({
         role="alert"
         className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950"
       >
+        <h1 className="mb-3 text-lg font-semibold">Unable to load this page</h1>
         <p className="text-zinc-700 dark:text-zinc-300">{message}</p>
         <button
           type="button"
           onClick={() => retry()}
-          className="mt-6 w-full rounded-md bg-zinc-900 px-4 py-2 font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          className="ui-button ui-button-primary mt-6 w-full"
         >
           Retry
         </button>

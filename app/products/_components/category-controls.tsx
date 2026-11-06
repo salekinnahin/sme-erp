@@ -12,12 +12,10 @@ import {
   type StatusState,
 } from "../actions";
 
-const INPUT =
-  "block w-full rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
-const BUTTON =
-  "rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
-const PRIMARY = `${BUTTON} bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200`;
-const SECONDARY = `${BUTTON} border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800`;
+const INPUT = "ui-input";
+const BUTTON = "ui-button";
+const PRIMARY = `${BUTTON} ui-button-primary`;
+const SECONDARY = `${BUTTON} ui-button-secondary`;
 
 /** Adds a category. The form clears after a successful save. */
 export function AddCategoryForm() {

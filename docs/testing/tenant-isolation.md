@@ -495,3 +495,17 @@ Legacy rollout: query `purchase_order_items where product_type is null` with tru
 
 
 Goods Receiving review regressions (DECISIONS 028): direct ordered → received/partially_received without receipts and mismatched states after receiving fail GR009; privileged sealing produces partial status; RPC completion and valid direct status writes succeed. An ordered PO with an unsealed receipt rejects cancellation with the exact receipt-specific message, without disabling triggers. BEFORE TRUNCATE is exercised as postgres for receipt and PO tables (deferred receipt events are flushed first so the explicit guard is reached). A first 70-of-100 receipt followed by 31 fails GR003 with unchanged receipt/items/counter/summary, alongside the existing 101-from-zero and partial/multiple receipt cases. Early dates fail GR007 through RPC and privileged insert; same-day and later dates succeed. Removing only the cancellation trigger in a disposable local database makes the exact cancellation regression fail as intended. Native local concurrent lock waits remain unverified.
+
+## 11. Organization Branding (logo)
+
+Apply `20261104210000_organization_branding.sql` after every earlier migration (it creates the private `organization-branding` bucket and its `storage.objects` policies; no manual bucket setup). Run `supabase/tests/organization_branding.sql` as postgres. Expected: `ALL ORGANIZATION BRANDING CHECKS PASSED`; everything rolls back.
+
+Coverage: dropped `logo_url`, new columns, private bucket limits/MIME allowlist (no SVG), four policies, definer/invoker definitions, search paths and grants; exact key parsing (upper case, extension, prefix, traversal, other names rejected); employee, disabled member and other-tenant upload/record/clear denied; record refused before the object exists; manager upload and record; owner replace; members read, other tenants and disabled members cannot read/replace; moving an object into another tenant's key blocked; `logo_path` CHECK for privileged writers; direct `organizations` updates denied; clear (idempotent) and owner delete; anonymous denial. Local runs use PGlite with a minimal simulated `storage` schema. On hosted Supabase, direct SQL deletes on storage tables may be blocked (`storage.protect_delete`); the suite then skips delete-row assertions and relies on the structural policy check, so test deletion through the app below.
+
+Signed-in browser checks (local Supabase or a test project):
+
+1. As owner and as manager, open `/settings/organization`. Upload a PNG, a JPEG and a WebP: preview shows before saving; success message; preview refreshes. Replace with a different format: Storage still holds exactly one object, `organizations/<org id>/logo`.
+2. Rejections with friendly messages: a 2.1 MB image, an SVG, a `.txt` renamed to `.png`, a 10 × 10 px image. Nothing changes in Storage or the organization row.
+3. As employee: the logo is visible, there are no upload/remove controls. A crafted Server Action or direct Storage API call (`upload` to the org key with the employee's session) is refused.
+4. As tenant B: Storage API `createSignedUrl`, `download`, `upload(upsert)` and `remove` on tenant A's key all fail; `rpc('set_organization_logo', { p_organization_id: <A> })` returns 42501.
+5. Print a quotation and a sales order: the logo appears left of the company details, bounded and undistorted, in Print → Save as PDF too. Remove the logo: both print with the text-only header; existing documents keep their own snapshot values.

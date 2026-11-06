@@ -7,6 +7,9 @@ export type OrganizationDetails = {
   phone: string | null;
   address: string | null;
   taxNumber: string | null;
+  /** Storage object key of the current logo (never a URL), or null. */
+  logoPath: string | null;
+  logoUpdatedAt: string | null;
 };
 
 /**
@@ -20,7 +23,7 @@ export async function getOrganizationDetails(
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("organizations")
-    .select("name, email, phone, address, tax_number")
+    .select("name, email, phone, address, tax_number, logo_path, logo_updated_at")
     .eq("id", tenant.organization.id)
     .maybeSingle<{
       name: string;
@@ -28,6 +31,8 @@ export async function getOrganizationDetails(
       phone: string | null;
       address: string | null;
       tax_number: string | null;
+      logo_path: string | null;
+      logo_updated_at: string | null;
     }>();
   if (error) throw new Error("Failed to load organization.", { cause: error });
   if (!data) throw new Error("Organization not readable for an active member.");
@@ -37,5 +42,7 @@ export async function getOrganizationDetails(
     phone: data.phone,
     address: data.address,
     taxNumber: data.tax_number,
+    logoPath: data.logo_path,
+    logoUpdatedAt: data.logo_updated_at,
   };
 }

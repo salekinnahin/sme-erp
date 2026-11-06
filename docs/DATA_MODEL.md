@@ -19,7 +19,7 @@
 | Table | Columns | Notes |
 | --- | --- | --- |
 | `profiles` | `id` (= `auth.users.id`), `full_name`, `phone`, `avatar_url`, `created_at`, `updated_at` | Created by the `on_auth_user_created` trigger from signup metadata (`full_name`). No credentials. |
-| `organizations` | `id`, `name`, `email`, `phone`, `address`, `currency` (one of the V1 supported codes, default `BDT`; see DECISIONS 012), `timezone` (IANA, default `Asia/Dhaka`), `tax_number`, `logo_url`, `created_at`, `updated_at`, `created_by` | A tenant. `created_by` is set null if the user is deleted. |
+| `organizations` | `id`, `name`, `email`, `phone`, `address`, `currency` (one of the V1 supported codes, default `BDT`; see DECISIONS 012), `timezone` (IANA, default `Asia/Dhaka`), `tax_number`, `logo_path`, `logo_updated_at`, `created_at`, `updated_at`, `created_by` | A tenant. `created_by` is set null if the user is deleted. `logo_path` is a Storage object key (never a URL), NULL or exactly `organizations/<id>/logo` (CHECK); `logo_updated_at` is set with it (DECISIONS 029). The unused `logo_url` column was dropped by `20261104210000_organization_branding.sql`. |
 | `organization_members` | `id`, `organization_id`, `user_id`, `role` (`owner`/`manager`/`employee`), `status` (`active`/`disabled`), `created_at`, `updated_at` | `unique (organization_id, user_id)`; index on `user_id`. The unique index also serves lookups by `organization_id`. |
 
 Access rules:
@@ -446,3 +446,13 @@ Receipt creation is the future inventory stock-in event, with durable receipt/it
 
 
 Goods Receiving review (DECISIONS 028): received_date must be on/after the PO order_date, including privileged header inserts. Summaries count sealed receipt items only; sealing reconciles PO receiving status for every writer, and direct inconsistent PO states fail with GR009. Both receipt and PO headers/items reject TRUNCATE via statement triggers. The unapplied receiving migration is edited directly, as confirmed by the user.
+
+## Organization Branding (implemented)
+
+Migration `20261104210000_organization_branding.sql` (DECISIONS 029).
+
+- `organizations.logo_path` / `logo_updated_at`: the current company logo. Live organization data, **not** snapshotted into documents: a changed or removed logo appears on every later print of existing quotations and sales orders. Document customer/line/total snapshots are unaffected.
+- No website column exists; branding reuses `name`, `address`, `phone`, `email`, `tax_number`. Organization details have no edit path yet (set at onboarding).
+- Storage: private bucket `organization-branding` (created by the migration), 2 MiB limit, `image/png`, `image/jpeg`, `image/webp` only. One object per organization at `organizations/<organization_id>/logo` (no extension); replacing overwrites it.
+- `public.organization_logo_path(org)` and `public.organization_logo_object_org(name)`: pure path helpers shared by policies and RPCs. The parser accepts only the exact lower-case canonical key.
+- `public.set_organization_logo(org)` (owner/manager; the object must exist, else `P0002`) and `public.clear_organization_logo(org)` (owner/manager): SECURITY DEFINER, fixed search path, the only writes to these columns. API roles still have SELECT only on `organizations`.

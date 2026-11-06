@@ -12,7 +12,7 @@ Intended stack, and what the repository actually uses today:
 | Styling | Tailwind CSS | Tailwind CSS v4, loaded through the `@tailwindcss/turbopack` loader in `next.config.ts` (no PostCSS config) |
 | Backend / DB | Supabase + PostgreSQL | Supabase via `@supabase/ssr` and `@supabase/supabase-js`. SQL migrations in `supabase/migrations/` (applied manually or with the Supabase CLI; the CLI is not a project dependency) |
 | Auth | Supabase Auth | Implemented: email/password sign-up, sign-in, sign-out, email confirmation |
-| File storage | Supabase Storage | Not used yet |
+| File storage | Supabase Storage | Organization logos only (private `organization-branding` bucket, DECISIONS 029) |
 | Hosting | Vercel | Not configured in the repository |
 | Linting | ESLint | ESLint 9 with `eslint-config-next` (core-web-vitals + typescript) |
 | Tests | — | Vitest 4 (`npm test`) for TypeScript domain/validation logic, `lib/**/*.test.ts`, Node environment. SQL tests in `supabase/tests/`, run in the SQL Editor |
@@ -51,8 +51,8 @@ app/
     confirm/route.ts         Email confirmation handler (token_hash or PKCE code)
     login/, sign-up/, forgot-password/
     _components/ui.tsx       Shared auth UI (AuthCard, SubmitButton, …)
-  _components/               Shared non-auth UI (AppHeader navigation, TenantLoadError,
-                             StatusBadge, ListPagination, link styles)
+  _components/               Shared workspace shell, page/form/table/document primitives,
+                             native dialogs, badges, pagination and safe errors
   customers/                 Customer list, new, [id] detail, [id]/edit
     actions.ts               Server Actions: create, update, set status
     _components/             Customer form, deactivate/reactivate control
@@ -79,7 +79,9 @@ lib/
   auth/errors.ts             Maps Supabase auth errors to safe user-facing messages
   tenancy/context.ts         getUser / requireUser / getTenant / requireTenant
   organizations/             Organization validation, createOrganization(),
-                             getOrganizationDetails() (letterhead)
+                             getOrganizationDetails() (letterhead), branding.ts
+                             (getOrganizationBranding(), logo upload/remove),
+                             logo.ts (client-safe logo rules), permissions.ts
   customers/                 validation.ts, permissions.ts, customers.ts (domain functions)
   vendors/                   validation.ts, permissions.ts, vendors.ts (domain functions)
   products/                  validation.ts, permissions.ts, errors.ts, products.ts,
@@ -190,7 +192,6 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 
 - Invitations, member management, role changes
 - ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders`, `sales_order_items`, `invoices` and `invoice_items` (no stock or payments yet)
-- Supabase Storage usage
 - Automated UI / end-to-end tests
 
 ## Organization Feature Entitlements
@@ -229,3 +230,29 @@ Goods Receipt is the future source document for stock-in movements; no ledger or
 
 
 Goods Receiving review (DECISIONS 028): only sealed receipts count in the shared summary. Receipt sealing now reconciles PO status through a private summary-derived helper, covering privileged assembly as well as the RPC. PO INSERT/UPDATE validates receiving states against that helper (`GR009`) without mutating receipts. Header insertion locks the PO and enforces eligibility and received_date >= order_date. Cheap payload checks precede the RPC lock after authorization. BEFORE TRUNCATE guards protect both receipt tables and both PO tables.
+
+## Organization Branding
+
+See DECISIONS 029.
+
+- Route `/settings/organization` (`app/settings/`): read-only company details, current logo preview, Upload/Replace and Remove (owner/manager; employees see the logo only). Grouped sidebar navigation: Settings → Organization; `/settings` is a signed-in proxy prefix.
+- Upload: the Server Action reads only the `logo` file, takes the tenant from `requireTenant()`, and calls `uploadOrganizationLogo()`. That checks the role, validates the bytes (`lib/organizations/logo.ts`: signature-detected PNG/JPEG/WebP, ≤ 2 MB, 16–4096 px per side), uploads with the **user's** Supabase session (`upsert`, detected content type) and then calls `set_organization_logo`. No service-role key. `experimental.serverActions.bodySizeLimit` is `3mb` for this upload.
+- Read: `getOrganizationBranding(tenant)` uses module-scope React `cache()` for request-only deduplication. Pass the exact `requireTenant()` result (the object from request-cached `getTenant()`), never a fresh copy. It reuses `getOrganizationDetails()` and adds a signed URL (1 hour) created at render time; any signing failure falls back to `logoUrl = null`.
+- Documents: `app/_components/document-brand-header.tsx` (`DocumentBrandHeader`: branding + title + number + metadata rows) is the shared letterhead, used by the quotation, sales order, invoice and purchase order print views. The logo is a plain `<img>` in a fixed 4 × 10 rem box (`object-contain`), hidden if it fails to load. Goods receipts and supplier bills can adopt it when their print views are built.
+
+
+## Workspace UI and navigation (DECISIONS 030)
+
+All main modules use `app/_components/app-layout.tsx`. `AppLayout` places request-time `Workspace` inside Suspense; it resolves `requireTenant()` and the existing private-logo branding helper. `AppFrame` owns only route presentation and the mobile dialog. Server-rendered pages remain children of this client boundary; document/list reads, permission helpers, Server Actions and domain functions are unchanged. Root `app/error.tsx` also handles failures in async module layouts safely through the installed Next.js `retry` callback, which re-fetches server data.
+
+- Desktop: a fixed 248px `AppSidebar`, a 57px `AppTopbar`, and a fluid content area capped at 1560px. At widths below 1024px the same sidebar renderer opens in a native modal drawer. It exposes `aria-expanded`, locks/restores page scroll, returns focus on explicit close/Escape, and closes on selection, route changes and crossing the desktop breakpoint. No client data fetching or new packages.
+- `lib/ui/navigation.ts` is the single route registry: Overview (Dashboard); Sales (Customers, Quotations, Sales orders, Invoices); Purchases (Vendors, Purchase orders); Inventory (Products, including categories); Settings (Organization). Active matching uses segment boundaries. There are no unimplemented links. Rental has no routes and no entries, even for an entitled organization. `visibleNavigation` gates future optional groups by an explicit entitlement; no unnecessary feature RPC runs while there is no optional module to show. Actual future module authorization must still use the existing server/database entitlement checks.
+- `globals.css` centralizes light-theme surface, border, typography, accent, status, radius, shadow and spacing tokens. Shared semantic CSS classes are scoped to their primitives; document tables never inherit application-table rules. Existing Tailwind utilities remain available. There is no shadcn installation, theme provider, dark-mode control or icon dependency; small SVG icons live in `icon.tsx`.
+- Reusable UI in `_components/ui.tsx`: PageContainer, PageHeader/PageActions, SectionCard, FormSection, MetadataList/MetadataItem, MoneySummary, DocumentSummary, FilterToolbar, DataTable, EmptyState and PageSkeleton. `DocumentItems` renders the four documents' stored snapshots and exact-decimal amounts; it does not calculate totals. `MoneySummary` receives already formatted values, including incomplete preview placeholders.
+- Lists keep their existing GET forms, parameter parsers, bounded queries, filters and pagination. No automatic search behavior or aggregate/KPI query was introduced. The dashboard is a workspace launcher using the existing organization context, not an analytics dashboard.
+- Document workflow controls use `PageHeader.actions`, including sales-order invoice conversion. Permission/transition helpers and action implementations are reused; summary rails contain information only. Documents use main content plus a summary rail at 1280px and above; forms use the same split with a main form and sticky preview/notes rail. Narrow screens stack in DOM order, with horizontal scrolling confined to labelled, focusable data-table regions. Desktop rails are bounded to `100dvh - 105px` with overflow scrolling; below 800px viewport height they become static and unbounded. Mobile rails do not introduce nested scrolling. Filter toolbars use compact visible labels. Master-data forms use grouped sections. All line IDs, prices, snapshots, restore controls, inline errors and selector request-generation logic are retained.
+- Status tones are centralized in `lib/ui/status.ts`; each module still owns its status labels and types. Native `ConfirmDialog` supplies modal focus containment, Escape, descriptive labels, safe initial focus on the back/cancel button, and focus return. The description references only the confirmation message, with controls and alerts outside it. Errors inside an open confirmation remain visible in the modal. Buttons still submit the original action form with its original IDs and target status.
+- Organization identity uses the existing signed logo URL in a fixed 32px box and falls back to initials on absent/failed images. Organization settings remain read-only except for the existing role-controlled logo actions. Auth/onboarding reuse the same input/button styling without adopting tenant navigation.
+- Print isolation: `AppFrame` recognizes only the four implemented `/<module>/<id>/print` route shapes and renders `document-print-frame`, with no sidebar, topbar, mobile drawer or application content padding. That wrapper preserves the old screen-preview width/padding and Arial document font; print CSS removes its padding. The four print page sources and `DocumentBrandHeader` are unchanged by the revamp. Print CSS also hides chrome defensively.
+
+UI tests in `lib/ui/` exercise the registry, route states, status/branding presentation and rendered pages using synthetic tenant/domain fixtures. These supplement the existing permission, exact-money, selector-race, form-token, action and domain tests; they do not replace database integration coverage. Native dialog and breakpoint behavior also need browser checks. Fixture helpers are test-only; no preview or test route is exposed in the app.

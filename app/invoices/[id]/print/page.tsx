@@ -4,20 +4,22 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { requireTenant } from "@/lib/tenancy/context";
 import { getInvoice } from "@/lib/invoices/invoices";
-import { getOrganizationDetails } from "@/lib/organizations/details";
+import { getOrganizationBranding } from "@/lib/organizations/branding";
 import { INVOICE_STATUS_LABELS } from "@/lib/invoices/validation";
 import { formatCalendarDate, formatMoney, formatQuantity, plainDecimal } from "@/lib/format";
 import { TEXT_LINK } from "@/app/_components/styles";
 import { PrintButton } from "@/app/_components/print-button";
+import { DocumentBrandHeader } from "@/app/_components/document-brand-header";
 
 export const metadata: Metadata = { title: "Print invoice · SME ERP" };
 
 /**
  * Browser print view (same layout rules as the quotation print view). App
  * chrome and the toolbar are hidden when printing. The document always uses
- * dark-on-white "paper" colors. Order values come from the invoice's snapshot
- * only; the letterhead is the organization's current details. Browser Print
- * → Save as PDF gives a PDF; there is no PDF library.
+ * dark-on-white "paper" colors. Invoice values come from the invoice's
+ * snapshot only; the letterhead is the organization's live branding (logo and
+ * details, DECISIONS 029). Browser Print → Save as PDF gives a PDF; there is
+ * no PDF library.
  */
 export default function PrintInvoicePage({ params }: PageProps<"/invoices/[id]/print">) {
   return (
@@ -32,7 +34,7 @@ async function PrintInvoice({ params }: Pick<PageProps<"/invoices/[id]/print">, 
   const tenant = await requireTenant();
   const invoice = await getInvoice(tenant, id);
   if (!invoice) notFound();
-  const org = await getOrganizationDetails(tenant);
+  const branding = await getOrganizationBranding(tenant);
 
   const money = (amount: string) => formatMoney(amount, tenant.organization.currency);
 
@@ -53,34 +55,19 @@ async function PrintInvoice({ params }: Pick<PageProps<"/invoices/[id]/print">, 
       </div>
 
       <article className="mx-auto max-w-4xl bg-white p-8 text-sm text-zinc-900 shadow-sm ring-1 ring-zinc-200 sm:p-12 print:max-w-none print:p-0 print:shadow-none print:ring-0">
-        <header className="flex flex-wrap items-start justify-between gap-6 border-b border-zinc-300 pb-6">
-          <div className="max-w-sm space-y-0.5 break-words">
-            <p className="text-lg font-semibold">{org.name}</p>
-            {org.address && <p className="whitespace-pre-line">{org.address}</p>}
-            {org.phone && <p>{org.phone}</p>}
-            {org.email && <p>{org.email}</p>}
-            {org.taxNumber && <p>Tax number: {org.taxNumber}</p>}
-          </div>
-          <div className="text-right">
-            <h1 className="text-2xl font-semibold tracking-wide uppercase">Invoice</h1>
-            <dl className="mt-2 grid grid-cols-[auto_auto] justify-end gap-x-4 gap-y-0.5">
-              <dt className="text-zinc-600">Number</dt>
-              <dd className="font-mono font-medium">{invoice.invoiceNumber}</dd>
-              <dt className="text-zinc-600">Invoice date</dt>
-              <dd>{formatCalendarDate(invoice.invoiceDate)}</dd>
-              <dt className="text-zinc-600">Due date</dt>
-              <dd>{invoice.dueDate ? formatCalendarDate(invoice.dueDate) : "—"}</dd>
-              <dt className="text-zinc-600">Status</dt>
-              <dd>{INVOICE_STATUS_LABELS[invoice.status]}</dd>
-              {invoice.sourceSalesOrderNumber && (
-                <>
-                  <dt className="text-zinc-600">Sales order</dt>
-                  <dd className="font-mono">{invoice.sourceSalesOrderNumber}</dd>
-                </>
-              )}
-            </dl>
-          </div>
-        </header>
+        <DocumentBrandHeader
+          branding={branding}
+          title="Invoice"
+          number={invoice.invoiceNumber}
+          meta={[
+            { label: "Invoice date", value: formatCalendarDate(invoice.invoiceDate) },
+            { label: "Due date", value: invoice.dueDate ? formatCalendarDate(invoice.dueDate) : "—" },
+            { label: "Status", value: INVOICE_STATUS_LABELS[invoice.status] },
+            ...(invoice.sourceSalesOrderNumber
+              ? [{ label: "Sales order", value: invoice.sourceSalesOrderNumber, mono: true }]
+              : []),
+          ]}
+        />
 
         <section className="mt-6 break-words">
           <h2 className="text-xs font-semibold tracking-wide text-zinc-600 uppercase">Customer</h2>

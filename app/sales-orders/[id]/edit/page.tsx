@@ -1,3 +1,4 @@
+import { PageHeader, PageSkeleton } from "@/app/_components/ui";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
@@ -13,7 +14,7 @@ export const metadata: Metadata = { title: "Edit sales order · SME ERP" };
 
 export default function EditSalesOrderPage({ params }: PageProps<"/sales-orders/[id]/edit">) {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+    <Suspense fallback={<PageSkeleton label="Loading…" />}>
       <EditSalesOrder params={params} />
     </Suspense>
   );
@@ -42,13 +43,8 @@ async function EditSalesOrder({ params }: Pick<PageProps<"/sales-orders/[id]/edi
 
   return (
     <div>
-      <h1 className="text-2xl font-semibold">
-        Edit sales order <span className="font-mono">{order.salesOrderNumber}</span>
-      </h1>
-      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-        Unchanged customer and lines keep the details recorded on this order. A newly chosen
-        customer or product takes its current details.
-      </p>
+      <PageHeader title={<> Edit sales order <span className="font-mono">{order.salesOrderNumber}</span> </>} description={<> Unchanged customer and lines keep the details recorded on this order. A newly chosen
+        customer or product takes its current details. </>} />
       {(inactiveCustomer || inactiveProducts) && (
         <p className="mt-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
           This draft uses an inactive{" "}

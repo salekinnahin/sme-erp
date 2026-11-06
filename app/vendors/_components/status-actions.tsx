@@ -1,15 +1,15 @@
 "use client";
 
+import { ConfirmDialog } from "@/app/_components/confirm-dialog";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Alert } from "@/app/auth/_components/ui";
 import type { VendorStatus } from "@/lib/vendors/validation";
 import { setVendorStatusAction, type VendorStatusState } from "../actions";
 
-const BUTTON =
-  "rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
-const SECONDARY = `${BUTTON} border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800`;
-const DANGER = `${BUTTON} bg-red-600 text-white hover:bg-red-700`;
+const BUTTON = "ui-button";
+const SECONDARY = `${BUTTON} ui-button-secondary`;
+const DANGER = `${BUTTON} ui-button-danger`;
 
 /**
  * Deactivate (with confirmation) or reactivate a vendor. Only rendered for
@@ -33,8 +33,8 @@ export function StatusActions({
   const target: VendorStatus = status === "active" ? "inactive" : "active";
 
   return (
-    <div className="space-y-2">
-      {state.error && <Alert kind="error">{state.error}</Alert>}
+    <div data-confirm-scope className="space-y-2">
+      {state.error && !confirming && <Alert kind="error">{state.error}</Alert>}
       {status === "active" && !confirming ? (
         <button
           type="button"
@@ -48,15 +48,17 @@ export function StatusActions({
           <input type="hidden" name="vendorId" value={vendorId} />
           <input type="hidden" name="status" value={target} />
           {target === "inactive" ? (
-            <div
-              role="alertdialog"
-              aria-labelledby="deactivate-title"
-              className="space-y-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm dark:border-red-900 dark:bg-red-950"
+            <ConfirmDialog
+              title="Deactivate vendor"
+              description={
+                <p id="deactivate-title" className="text-red-800 dark:text-red-200">
+                  Deactivate <strong>{vendorName}</strong>? The vendor and
+                  its details are kept, and you can reactivate it later.
+                </p>
+              }
+              onClose={() => setConfirming(false)}
             >
-              <p id="deactivate-title" className="text-red-800 dark:text-red-200">
-                Deactivate <strong>{vendorName}</strong>? The vendor and
-                its details are kept, and you can reactivate it later.
-              </p>
+              {state.error && <Alert kind="error">{state.error}</Alert>}
               <div className="flex gap-2">
                 <ConfirmButton className={DANGER} pendingText="Deactivating…">
                   Yes, deactivate
@@ -69,7 +71,7 @@ export function StatusActions({
                   Cancel
                 </button>
               </div>
-            </div>
+            </ConfirmDialog>
           ) : (
             <ConfirmButton className={SECONDARY} pendingText="Reactivating…">
               Reactivate

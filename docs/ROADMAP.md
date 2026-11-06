@@ -19,7 +19,8 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 - [x] RLS foundation and helper functions
 - [ ] User management (invite, role change, remove)
 - [ ] Audit log foundation
-- [ ] App shell and navigation (minimal header with Dashboard, Customers, Vendors and Products links exists)
+- [x] Shared modern light UI and app shell: grouped desktop sidebar, accessible mobile drawer, organization branding, consistent list/detail/forms across existing modules, isolated business-document prints (DECISIONS 030). No new business modules or analytics. Verification details in `tasks/current.md`.
+- [x] Organization branding: company logo upload/replace/remove (owner/manager) on `/settings/organization`, shown on quotation, sales order, invoice and purchase order prints via the shared `DocumentBrandHeader` (DECISIONS 029). Goods receipts/supplier bills can adopt it later
 
 ## Phase 2 — Master Data
 

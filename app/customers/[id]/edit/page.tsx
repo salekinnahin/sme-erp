@@ -1,3 +1,4 @@
+import { PageHeader, PageSkeleton } from "@/app/_components/ui";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
@@ -13,8 +14,8 @@ export default function EditCustomerPage({
   params,
 }: PageProps<"/customers/[id]/edit">) {
   return (
-    <div className="mx-auto max-w-2xl">
-      <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+    <div className="mx-auto max-w-3xl">
+      <Suspense fallback={<PageSkeleton label="Loading…" />}>
         <EditCustomer params={params} />
       </Suspense>
     </div>
@@ -32,8 +33,7 @@ async function EditCustomer({
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Edit customer</h1>
-      <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
+      <PageHeader title={<> Edit customer </>} description="Keep contact and company details up to date." /><div className="mt-6">
         <CustomerForm
           action={updateCustomerAction.bind(null, customer.id)}
           initialValues={{

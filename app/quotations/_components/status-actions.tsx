@@ -1,17 +1,18 @@
 "use client";
 
+import { ConfirmDialog } from "@/app/_components/confirm-dialog";
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Alert } from "@/app/auth/_components/ui";
+import type { QuotationStatus } from "@/lib/quotations/validation";
 import type { StatusAction, StatusActionTone } from "@/lib/quotations/status-actions";
 import { setQuotationStatusAction, type StatusState } from "../actions";
 
-const BUTTON =
-  "rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60";
+const BUTTON = "ui-button";
 const TONES: Record<StatusActionTone, string> = {
-  primary: `${BUTTON} bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200`,
-  secondary: `${BUTTON} border border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800`,
-  danger: `${BUTTON} bg-red-600 text-white hover:bg-red-700`,
+  primary: `${BUTTON} ui-button-primary`,
+  secondary: `${BUTTON} ui-button-secondary`,
+  danger: `${BUTTON} ui-button-danger`,
 };
 
 /**
@@ -22,32 +23,42 @@ const TONES: Record<StatusActionTone, string> = {
 export function QuotationStatusActions({
   quotationId,
   quotationNumber,
+  status,
   actions,
 }: {
   quotationId: string;
   quotationNumber: string;
+  status: QuotationStatus;
   actions: StatusAction[];
 }) {
   const [state, formAction] = useActionState<StatusState, FormData>(setQuotationStatusAction, {});
   const [confirming, setConfirming] = useState<StatusAction | null>(null);
 
-  if (actions.length === 0) return null;
+  const [seenStatus, setSeenStatus] = useState(status);
+  if (seenStatus !== status) {
+    setSeenStatus(status);
+    setConfirming(null);
+  }
+
+  if (actions.length === 0 && !state.error) return null;
 
   return (
-    <div className="space-y-2">
-      {state.error && <Alert kind="error">{state.error}</Alert>}
+    <div role="group" aria-label="Status actions" data-confirm-scope className="document-status-actions space-y-2">
+      {state.error && !confirming && <Alert kind="error">{state.error}</Alert>}
       {confirming ? (
         <form action={formAction}>
           <input type="hidden" name="quotationId" value={quotationId} />
           <input type="hidden" name="status" value={confirming.status} />
-          <div
-            role="alertdialog"
-            aria-labelledby="status-confirm-title"
-            className="max-w-md space-y-3 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+          <ConfirmDialog
+            title={confirming.label}
+            description={
+              <p id="status-confirm-title">
+                <strong>{quotationNumber}</strong>: {confirming.confirm}
+              </p>
+            }
+            onClose={() => setConfirming(null)}
           >
-            <p id="status-confirm-title">
-              <strong>{quotationNumber}</strong>: {confirming.confirm}
-            </p>
+            {state.error && <Alert kind="error">{state.error}</Alert>}
             <div className="flex flex-wrap gap-2">
               <ConfirmButton className={TONES[confirming.tone]} pendingText={confirming.pendingText}>
                 Yes, {confirming.label.toLowerCase()}
@@ -56,7 +67,7 @@ export function QuotationStatusActions({
                 Go back
               </button>
             </div>
-          </div>
+          </ConfirmDialog>
         </form>
       ) : (
         <div className="flex flex-wrap gap-2">

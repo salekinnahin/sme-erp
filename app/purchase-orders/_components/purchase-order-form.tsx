@@ -1,5 +1,6 @@
 "use client";
 
+import { FormSection, MoneySummary } from "@/app/_components/ui";
 import Link from "next/link";
 import { useActionState, useMemo, useRef, useState } from "react";
 import { Alert, SubmitButton } from "@/app/auth/_components/ui";
@@ -27,11 +28,9 @@ import type { PurchaseOrderFormState } from "@/lib/purchase-orders/messages";
 import { PURCHASE_ORDER_LIMITS, type PurchaseOrderItemErrors } from "@/lib/purchase-orders/validation";
 import { searchPurchaseOrderProductsAction, searchPurchaseOrderVendorsAction } from "../actions";
 
-const INPUT =
-  "mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
-const LABEL = "block text-sm font-medium text-zinc-700 dark:text-zinc-300";
-const SMALL_BUTTON =
-  "rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:hover:bg-zinc-800";
+const INPUT = "ui-input mt-1";
+const LABEL = "ui-label";
+const SMALL_BUTTON = "ui-button ui-button-secondary";
 
 type DecimalLineField = "quantity" | "unitPrice" | "discountAmount" | "taxRate";
 
@@ -108,12 +107,13 @@ export function PurchaseOrderForm({
   const money = (amount: string) => formatMoney(amount, currency);
 
   return (
-    <form action={formAction} noValidate className="space-y-8">
+    <form action={formAction} noValidate className="document-form space-y-5">
       {state.error && <Alert kind="error">{state.error}</Alert>}
 
       <input type="hidden" name="items" value={serializePurchaseOrderLines(values.lines)} />
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="form-main space-y-5">
+      <FormSection title="Basic information" className="form-header"><div className="grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
           <label htmlFor="vendorId" className={LABEL}>
             Vendor
@@ -171,9 +171,9 @@ export function PurchaseOrderForm({
           />
           <FieldError id="expectedDeliveryDate-error" error={fe.expectedDeliveryDate} />
         </div>
-      </section>
+      </div></FormSection>
 
-      <section aria-labelledby="lines-heading" className="space-y-4">
+      <section aria-labelledby="lines-heading" className="form-lines space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 id="lines-heading" className="text-lg font-semibold">
             Items
@@ -206,13 +206,27 @@ export function PurchaseOrderForm({
           ))}
         </ol>
 
-        <button type="button" onClick={addLine} disabled={!canAddLine} className={SMALL_BUTTON}>
+        <button type="button" onClick={addLine} disabled={!canAddLine} className={SMALL_BUTTON + " add-line"}>
           + Add line
         </button>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-2">
-        <div>
+      </div>
+      <aside className="form-summary space-y-5" aria-label="Document preview and notes"><div aria-live="polite"><MoneySummary title="Draft summary" rows={[
+          { label: "Subtotal", value: preview.totals && money(preview.totals.subtotal) },
+          { label: "Discount", value: preview.totals && money(preview.totals.discountTotal) },
+          { label: "Tax", value: preview.totals && money(preview.totals.taxTotal) },
+        ]} total={preview.totals && money(preview.totals.grandTotal)} footer={<>{preview.incomplete > 0 && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+              {preview.incomplete === 1
+                ? "1 line is incomplete or invalid and is not included yet."
+                : `${preview.incomplete} lines are incomplete or invalid and are not included yet.`}
+            </p>
+          )}
+          <p className="mt-3 text-xs text-zinc-500">
+            Preview. The saved amounts are calculated by the server.
+          </p>
+        </>} /></div><FormSection title="Notes">
           <label htmlFor="notes" className={LABEL}>
             Notes <span className="font-normal text-zinc-500">(optional)</span>
           </label>
@@ -227,33 +241,12 @@ export function PurchaseOrderForm({
             className={INPUT}
           />
           <FieldError id="notes-error" error={fe.notes} />
-        </div>
-        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-          <dl className="space-y-2" aria-live="polite">
-            <TotalRow label="Subtotal" value={preview.totals && money(preview.totals.subtotal)} />
-            <TotalRow label="Discount total" value={preview.totals && money(preview.totals.discountTotal)} />
-            <TotalRow label="Tax total" value={preview.totals && money(preview.totals.taxTotal)} />
-            <div className="border-t border-zinc-200 pt-2 dark:border-zinc-700">
-              <TotalRow label="Grand total" strong value={preview.totals && money(preview.totals.grandTotal)} />
-            </div>
-          </dl>
-          {preview.incomplete > 0 && (
-            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
-              {preview.incomplete === 1
-                ? "1 line is incomplete or invalid and is not included yet."
-                : `${preview.incomplete} lines are incomplete or invalid and are not included yet.`}
-            </p>
-          )}
-          <p className="mt-3 text-xs text-zinc-500">
-            Preview. The saved amounts are calculated by the server.
-          </p>
-        </div>
-      </section>
+        </FormSection></aside>
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+      <div className="form-actions">
         <Link
           href={cancelHref}
-          className="text-center text-sm text-zinc-600 underline hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+          className="ui-button ui-button-secondary"
         >
           Cancel
         </Link>
@@ -330,14 +323,14 @@ function LineEditor({
   };
 
   return (
-    <li className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="mb-3 flex items-center justify-between gap-2">
+    <li className="line-editor">
+      <div className="line-editor-head">
         <p className="text-sm font-medium text-zinc-500">Line {index + 1}</p>
         <button
           type="button"
           onClick={onRemove}
           disabled={!canRemove}
-          className="text-sm text-red-600 underline hover:text-red-800 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-40"
+          className="ui-button text-red-700 hover:bg-red-50 disabled:opacity-40"
           aria-label={`Remove line ${index + 1}`}
         >
           Remove
@@ -413,15 +406,6 @@ function LineEditor({
         </div>
       </div>
     </li>
-  );
-}
-
-function TotalRow({ label, value, strong }: { label: string; value: string | null; strong?: boolean }) {
-  return (
-    <div className={`flex justify-between gap-4 ${strong ? "text-base font-semibold" : ""}`}>
-      <dt className={strong ? undefined : "text-zinc-600 dark:text-zinc-400"}>{label}</dt>
-      <dd className="tabular-nums">{value ?? "—"}</dd>
-    </div>
   );
 }
 

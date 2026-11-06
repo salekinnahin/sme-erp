@@ -12,9 +12,9 @@ export function AuthCard({
   children: React.ReactNode;
 }) {
   return (
-    <main className="flex flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <div className="w-full max-w-sm rounded-xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-sm font-semibold tracking-wide text-zinc-500">
+    <main className="flex min-h-dvh flex-1 items-center justify-center bg-background px-4 py-12">
+      <div className="w-full max-w-sm rounded-xl border border-border bg-white p-7 shadow-sm sm:p-9">
+        <p className="text-xs font-bold tracking-widest text-primary">
           SME ERP
         </p>
         <h1 className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -148,8 +148,7 @@ export function Select({
   );
 }
 
-const INPUT_CLASS =
-  "mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
+const INPUT_CLASS = "ui-input mt-1";
 
 function FieldLabel({
   name,
@@ -195,7 +194,7 @@ export function SubmitButton({
       type="submit"
       disabled={pending}
       aria-disabled={pending}
-      className="w-full rounded-md bg-zinc-900 px-4 py-2 font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+      className="ui-button ui-button-primary w-full"
     >
       {pending ? pendingText : children}
     </button>

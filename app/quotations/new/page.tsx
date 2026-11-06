@@ -1,3 +1,4 @@
+import { PageHeader, PageSkeleton } from "@/app/_components/ui";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
@@ -12,12 +13,9 @@ export const metadata: Metadata = { title: "New quotation · SME ERP" };
 export default function NewQuotationPage() {
   return (
     <div>
-      <h1 className="text-2xl font-semibold">New quotation</h1>
-      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-        Saved as a draft. You can edit it until it is marked as sent.
-      </p>
+      <PageHeader title={<> New quotation </>} description={<> Saved as a draft. You can edit it until it is marked as sent. </>} />
       <div className="mt-6">
-        <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+        <Suspense fallback={<PageSkeleton label="Loading…" />}>
           <NewQuotation />
         </Suspense>
       </div>

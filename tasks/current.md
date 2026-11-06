@@ -1,5 +1,55 @@
 # Current Task
 
+## UI Revamp review fixes (2026-11-06)
+
+- Fixed root recovery with installed Next.js 16.4.5 `retry` (user confirmed; `unstable_retry` is absent from this runtime). Safe error presentation retained.
+- Request-only React branding cache uses the exact tenant reference returned by request-cached `getTenant()`; no persistent signed URL cache or changed authorization.
+- Existing document status actions moved into PageHeader, plus sales-order Create/View Invoice. Same role/status matrix; safe stale-action feedback survives refresh, including quotations.
+- Visible filter labels, bounded desktop rails (static below 800px height), expanded drawer state/scroll lock/focus and resize handling, logout pending feedback, descriptive-only confirmation text, orphan comment and branding success-copy cleanup.
+- Final Vitest: **1161 passed / 72 files** (81 additional checks). Lint and `npx tsc --noEmit` passed. Default `npm run build` blocked by local Turbopack worker port binding in both sandboxed and escalated runs; supplemental `npm run build -- --webpack` passed (compilation, TypeScript and 45 generated pages). Details in `docs/testing/ui-revamp.md`.
+- No SQL run or remote Supabase access. SQL, write/domain rules, four print sources, payloads, selectors, permissions and snapshots unchanged. Existing branding action changed only its success copy. No commit or push.
+- Browser checks performed and remaining manual/visual checks: `docs/testing/ui-revamp.md`. DECISIONS 030 follow-up records the implementation.
+
+## Modern UI Design System + App Shell Revamp (2026-11-06)
+
+Presentation refactor across Dashboard, Purchase Orders, Invoices, Sales Orders, Quotations, Products/categories, Customers, Vendors, Organization Settings and shared auth controls. DECISIONS 030 and ARCHITECTURE document the reusable system.
+
+- Shared server-resolved organization/branding shell; fixed desktop sidebar and compact topbar, native mobile navigation drawer. One grouped route registry, segment-safe active links, no dead links or optional Rental entries. No new dependency or feature queries.
+- Light tokens, page headers/actions, section cards, filter toolbars, accessible scrollable tables, metadata, document item/totals components, empty states and skeletons. Existing GET parameters, bounded reads and pagination retained. Dashboard only launches existing modules; no analytics/KPI queries.
+- Four document detail/form patterns migrated with summary rails and stacked responsive layouts. Existing business helpers, snapshots, exact money, line-token serialization, inactive-reference behavior, restoration controls and race-safe selectors retained. Confirmations use a native modal with keyboard focus handling and errors visible inside it.
+- Logo avatar uses private server-signed URL or initials; organization settings retain existing permissions and read-only details. All four print route sources and DocumentBrandHeader preserved; shell omitted from print routes with a separate paper-preview wrapper.
+- Baseline includes uncommitted branding/SQL work from the preceding task. This refactor preserves that work and changes no SQL, migrations, domain functions, Server Actions, RLS, proxy, Supabase config or package dependencies. No remote Supabase access, commit or push.
+
+### Verification
+
+- [x] `npm test`: **1080 passed / 68 files**, including 77 new UI checks. Final rerun recorded on completion.
+- [x] `npm run lint`; `npx tsc --noEmit`.
+- [x] `npm run build` with local worker escalation (sandbox first hit the documented port-binding restriction).
+- [x] Baseline comparison: SQL, existing domain files, Server Actions and the four print sources unchanged. No SQL suites run.
+- [x] Desktop fixture screenshots: sidebar, Dashboard, Customers/Vendors/Products lists, Organization Settings, PO list/detail/new and quotation list/new/edit.
+- [ ] Full browser matrix remains incomplete: mobile drawer/focus, remaining document screens, real logo interactions and all four browser print previews. Details and exact checked/pending screens: `docs/testing/ui-revamp.md`. Browser targeting/focus contention prevented a safe complete pass; two affected existing tabs were restored.
+- No product/architecture decision needs user input. No new receiving, inventory, payment, analytics or Rental functionality.
+
+## Previous task
+
+## Organization Branding / Logo Upload (2026-11-06)
+
+Owners/managers upload, replace and remove the company logo; quotation and sales order prints show it through a shared `DocumentBrandHeader` (DECISIONS 029). Branding is live, not snapshotted. No UI revamp, theming, invoice/PO header changes, document snapshots or entitlements.
+
+- Migration **`20261104210000_organization_branding.sql`**, after `20261104200000_goods_receipts.sql`; earlier migrations unchanged. Drops the unused `organizations.logo_url` (refuses if any value exists), adds `logo_path` + `logo_updated_at` with integrity CHECKs, creates the private `organization-branding` bucket (2 MiB, PNG/JPEG/WebP), four `storage.objects` policies and the `set_organization_logo` / `clear_organization_logo` RPCs.
+- One fixed object per organization: `organizations/<org id>/logo`. Server Action validates bytes (signature, size, dimensions), uploads with the user's session (no service role) and records via RPC. Signed 1-hour read URLs per render; missing/failed logo → text-only header.
+- Follow-up: invoice and purchase order print views now also use `DocumentBrandHeader` (all four documents share one letterhead). Snapshots, source sales order, amount paid/due and notes unchanged. `npm test` 1003 passed / 64 files; lint, `tsc`, build pass. No schema/storage change.
+- `/settings/organization` (+ nav "Settings", proxy prefix `/settings`): company details (read-only), logo preview, upload/replace/remove. Server Action body limit raised to 3 MB.
+
+### Verification (local only)
+
+- [x] `npm test`: **997 passed / 64 files** (77 new branding tests in 4 files)
+- [x] `npm run lint`, `npx tsc --noEmit` (after `next typegen`)
+- [x] `npm run build`: succeeded
+- [x] All 22 migrations apply and all **eleven** SQL suites pass on local PGlite (simulated Auth/API roles plus a minimal `storage` schema). Branding suite mutation-checked (role-weakened insert policy, removed path CHECK, removed object-existence check all fail).
+- [ ] Manual: apply `20261104210000_organization_branding.sql` (bucket and policies included), run `organization_branding.sql` in the SQL Editor, then the signed-in checks in `docs/testing/tenant-isolation.md` § 11 (real Storage API, including delete).
+- No remote Supabase access, commit or push performed.
+
 ## Goods Receiving Part 1 — review fixes (2026-11-06)
 
 - User confirmed receiving migration is **not applied remotely**. Edited `20261104200000_goods_receipts.sql` directly; no older migrations modified. DECISIONS 028 records the design.

@@ -1,3 +1,4 @@
+import { PageHeader, PageSkeleton } from "@/app/_components/ui";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
@@ -11,10 +12,9 @@ export const metadata: Metadata = { title: "New product · SME ERP" };
 
 export default function NewProductPage() {
   return (
-    <div className="mx-auto max-w-2xl">
-      <h1 className="text-2xl font-semibold">New product</h1>
-      <div className="mt-6 rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+    <div className="mx-auto max-w-3xl">
+      <PageHeader title={<> New product </>} description="Set product details, classification and pricing." /><div className="mt-6">
+        <Suspense fallback={<PageSkeleton label="Loading…" />}>
           <NewProduct />
         </Suspense>
       </div>

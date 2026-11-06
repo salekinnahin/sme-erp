@@ -1,48 +1,47 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
-import { requireTenant, type Role } from "@/lib/tenancy/context";
-import { AppHeader } from "../_components/app-header";
+import { requireTenant } from "@/lib/tenancy/context";
+import { AppLayout } from "@/app/_components/app-layout";
+import { PageHeader, PageSkeleton, SectionCard } from "@/app/_components/ui";
+import { Icon } from "@/app/_components/icon";
+import { visibleNavigation } from "@/lib/ui/navigation";
+import { Badge } from "@/app/_components/status-badge";
 
 export const metadata: Metadata = { title: "Dashboard · SME ERP" };
 
-const ROLE_LABELS: Record<Role, string> = {
-  owner: "Owner",
-  manager: "Manager",
-  employee: "Employee",
-};
-
 export default function DashboardPage() {
-  return (
-    <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-8">
-      <AppHeader />
-      <div className="mt-8">
-        <Suspense fallback={<p className="text-zinc-500">Loading…</p>}>
-          <Dashboard />
-        </Suspense>
-      </div>
-    </main>
-  );
+  return <AppLayout>
+    <Suspense fallback={<PageSkeleton />}>
+      <Dashboard />
+    </Suspense>
+  </AppLayout>;
 }
-
 async function Dashboard() {
-  // Redirects to /auth/login (no user) or /onboarding/organization (no org).
   const { organization, role } = await requireTenant();
-
-  return (
-    <div className="space-y-6">
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950">
-        <p className="text-lg font-medium">Welcome to SME ERP</p>
-        <dl className="mt-4 space-y-1 text-zinc-600 dark:text-zinc-400">
-          <div>
-            <dt className="inline font-medium">Organization: </dt>
-            <dd className="inline">{organization.name}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">Role: </dt>
-            <dd className="inline">{ROLE_LABELS[role]}</dd>
-          </div>
-        </dl>
-      </section>
-    </div>
-  );
+  return <div className="space-y-7">
+    <PageHeader title="Dashboard" description="Your workspace for everyday business operations." />
+    <SectionCard>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="mb-2 text-xs text-muted">YOUR ORGANIZATION</p>
+          <h2 className="text-xl font-semibold tracking-tight">{organization.name}</h2>
+          <p className="mt-2 text-sm text-muted">Keep sales, purchases and business records connected.</p>
+        </div>
+        <Badge tone="blue">
+          <span className="capitalize">{role}</span> access</Badge>
+      </div>
+    </SectionCard>
+    <div className="space-y-7">{visibleNavigation().filter((group) => !["Overview", "Settings"].includes(group.label)).map((group) => <section key={group.label}>
+      <h2 className="mb-3 text-xs font-semibold text-muted">{group.label}</h2>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{group.items.map((item) => <Link className="quick-link" key={item.href} href={item.href}>
+        <Icon name={item.icon} />
+        <div className="flex-1">
+          <p className="text-sm font-semibold">{item.label}</p>
+          <p className="mt-1 text-xs text-muted">Open {item.label.toLowerCase()}</p>
+        </div>
+        <Icon name="arrow" className="text-zinc-400" />
+      </Link>)}</div>
+    </section>)}</div>
+  </div>;
 }

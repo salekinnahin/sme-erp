@@ -1,3 +1,4 @@
+import { PageHeader, EmptyState, PageSkeleton } from "@/app/_components/ui";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -20,8 +21,8 @@ export default function CategoriesPage() {
       <Link href="/products" className={TEXT_LINK}>
         ← Products
       </Link>
-      <h1 className="text-2xl font-semibold">Product categories</h1>
-      <Suspense fallback={<p className="text-sm text-zinc-500">Loading categories…</p>}>
+      <PageHeader title="Product categories" description="Organize your catalog with simple product categories." />
+      <Suspense fallback={<PageSkeleton label="Loading categories…" />}>
         <CategoryList />
       </Suspense>
     </div>
@@ -48,9 +49,7 @@ async function CategoryList() {
       )}
 
       {categories.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-8 text-center text-zinc-600 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400">
-          No categories yet.
-        </div>
+        <EmptyState title="No categories yet" description="Add a category to start organizing your products." />
       ) : (
         <ul className="divide-y divide-zinc-200 rounded-xl border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-950">
           {categories.map((c) => (

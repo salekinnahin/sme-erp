@@ -39,10 +39,18 @@
 - Validate all input on the server, even if the client also validates.
 - Use parameterized queries through the Supabase client. Never build SQL from user strings.
 
-## File Uploads (when added)
+## File Uploads
 
 - Store in private Supabase Storage buckets with organization-scoped paths and policies.
 - Serve through signed URLs or server checks. Validate file type and size.
+
+### Organization logos (DECISIONS 029)
+
+- Private bucket `organization-branding`; bucket-level 2 MiB limit and PNG/JPEG/WebP MIME allowlist. **No SVG** (no sanitizing policy exists).
+- Fixed key per organization, `organizations/<organization_id>/logo`. `storage.objects` policies: active members SELECT their own organization's key; only active owners/managers INSERT/UPDATE/DELETE it. Keys that do not parse as exactly that shape (other names, extensions, upper case, traversal) match no policy. UPDATE WITH CHECK prevents renaming an object into another tenant's key.
+- `organizations.logo_path` can only be NULL or the row's own key (CHECK, also for privileged writers). It changes only through `set_organization_logo` / `clear_organization_logo`, which re-check owner/manager for the given organization; the app passes the session tenant, never a browser value.
+- The server validates the actual bytes (signature, size, dimensions) and stores the **detected** content type; the browser `accept` attribute and client checks are hints only. Storage errors are logged server-side and mapped to friendly messages.
+- Signed read URLs are created per render (1 hour) and never stored. Print views sign only the tenant's own key.
 
 ## CSV Import/Export
 

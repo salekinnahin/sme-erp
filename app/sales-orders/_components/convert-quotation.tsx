@@ -7,9 +7,8 @@ import { PRIMARY_LINK, SECONDARY_LINK } from "@/app/_components/styles";
 import type { ConversionView } from "@/lib/sales-orders/conversion";
 import type { ConversionFormState } from "@/lib/sales-orders/messages";
 
-const INPUT =
-  "mt-1 block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 aria-invalid:border-red-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-300";
-const LABEL = "block text-sm font-medium text-zinc-700 dark:text-zinc-300";
+const INPUT = "ui-input mt-1";
+const LABEL = "ui-label";
 
 /**
  * "Create sales order" / "View sales order" on an accepted quotation. The
