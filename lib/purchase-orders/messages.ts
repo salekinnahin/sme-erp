@@ -26,8 +26,17 @@ export const PURCHASE_ORDER_FAILURE_MESSAGES: Record<PurchaseOrderWriteFailure, 
     "This status change is not possible from the purchase order's current status. The page now shows its latest status.",
   reserved_receiving_status:
     "Received statuses are set by goods receiving, not by hand.",
+  product_type_changed:
+    "One or more inventory products have changed type since this purchase order was created. Restore their product type before marking the purchase order as ordered.",
   failed: GENERIC_ERROR,
 };
+
+/** A status failure message, naming the affected lines when the database reported them. */
+export function purchaseOrderStatusFailureMessage(reason: PurchaseOrderWriteFailure, affectedLines: readonly number[] = []): string {
+  const message = PURCHASE_ORDER_FAILURE_MESSAGES[reason];
+  if (reason !== "product_type_changed" || affectedLines.length === 0) return message;
+  return `${message} Affected ${affectedLines.length === 1 ? "line" : "lines"}: ${affectedLines.join(", ")}.`;
+}
 
 /**
  * Failures after which the page's data is stale (the order changed

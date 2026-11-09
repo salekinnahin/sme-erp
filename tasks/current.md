@@ -1,5 +1,40 @@
 # Current Task
 
+## Inventory / Stock Movement Ledger – Part 1 Backend (2026-11-10)
+
+Immutable stock ledger with Goods Receipt stock-in (DECISIONS 033). No Inventory UI, warehouses, adjustments, sales stock-out or returns.
+
+- Migration **`20261104240000_stock_movements.sql`** (after `20261104230000`; earlier migrations unchanged): `stock_movements` (signed numeric(18,3) `quantity_delta`, `goods_receipt` type/source, source receipt + line, product snapshots, `occurred_on` = received date), idempotency key `(organization_id, source_type, source_line_id)`, composite tenant FKs, RLS read-only, UPDATE/DELETE/TRUNCATE guards, posting trigger on receipt sealing (inventory snapshot lines only), derivation trigger for every insert path, verified backfill of existing sealed receipts, `list_current_stock()` and `list_stock_movements()`.
+- `lib/inventory/`: read-only typed readers, list params, exact quantity strings, labels/messages, permissions. No mutation helper.
+- `purchase_orders.sql`: the "no ledger yet" tripwire replaced by a check that PO operations leave the ledger unchanged. New suite `stock_movements.sql`.
+
+### Verification (local only)
+
+- [x] `npm test`: **1342 passed / 82 files** (56 new inventory tests in 5 files).
+- [x] `npm run lint`; `npx tsc --noEmit`; `npm run build` succeeded.
+- [x] All 25 migrations apply and all **twelve** SQL suites pass on local PGlite (PostgreSQL 18.6) with simulated Auth/API roles. Pre-ledger backfill scenario passes. 16 mutations each fail the new suite. Migration also applied inside an explicit transaction.
+- [ ] Manual: apply `20261104240000_stock_movements.sql` as one complete script after `20261104230000`; run `stock_movements.sql`, then re-run `goods_receipts.sql`, `purchase_orders.sql`, `products.sql` in the SQL Editor; native two-session check and API probe in `docs/testing/tenant-isolation.md` § 12.
+- No remote Supabase access, commit or push.
+- Follow-up (DECISIONS 034, same unapplied migration): `product_type` is locked once a product has a stock movement (`ST002`, trigger `products_lock_type_after_stock`; derivation takes `FOR SHARE` on the product). App maps it to a product-type field error. `goods_receipts.sql` updated to assert the lock; `stock_movements.sql` extended. Verification after the follow-up: `npm test` **1345 passed / 83 files**, lint, `tsc`, build, all 12 SQL suites, backfill scenario and 6 new mutations (see § 12).
+
+- Follow-up 2 (DECISIONS 035, same unapplied migration). Trigger `products_guard_type_change` replaces the DECISIONS 034 trigger.
+  - Rule A: a product cannot leave inventory while on an inventory line of an ordered/partially_received PO (`ST003`). Draft and cancelled POs do not lock. Repair to inventory is allowed.
+  - Rule B: movements lock the type permanently (`ST002`).
+  - Rule C: posting re-reads the product `FOR SHARE` and rolls the receipt back unless it is inventory (`ST004`).
+  - Type changes require READ COMMITTED (`ST005`).
+  - App messages for `ST003` (product form) and `ST004` (receive form).
+  - Tests: `goods_receipts.sql` updated for `ST004` and repair; `stock_movements.sql` extended; receive-message safety test allows "inventory" only for `product_not_inventory`.
+  - Verification: `npm test` **1349 passed / 83 files**, lint, `tsc`, build, all 12 SQL suites (PGlite and native embedded PostgreSQL 18.6), backfill and isolation scenarios, 3 native two-session races, 11 new mutations.
+
+- Follow-up 3 (DECISIONS 036, same unapplied migration): `draft → ordered` is refused with `ST006` (detail `lines: n,…`) when an inventory-snapshot line's product is no longer inventory.
+  - Trigger `purchase_orders_validate_inventory_types` covers the RPC and privileged updates; products are locked `FOR SHARE` before the type test.
+  - The app shows the friendly message plus the affected line numbers.
+  - Final lock order: PO → product for receiving and ordering; product only for type changes.
+  - Tests: `goods_receipts.sql` and `stock_movements.sql` updated (`ST004` now uses constructed invalid data); PO Vitest added.
+  - Verification: `npm test` **1354 passed / 83 files**, lint, `tsc`, build, all 12 SQL suites (PGlite and native), 5 native races (one regression found and fixed: filter-before-lock), mutations.
+
+## Previous task
+
 ## Goods Receiving – Received By snapshot and history item count (2026-11-07)
 
 Two focused Part 2 improvements (DECISIONS 032). No Inventory, no quantity/status/concurrency/sealing/cancellation/service/permission changes, no profile access widening.

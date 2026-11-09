@@ -5,11 +5,12 @@ import {
   PURCHASE_ORDER_FAILURE_MESSAGES,
   isStaleFailure,
   purchaseOrderFailureState,
+  purchaseOrderStatusFailureMessage,
 } from "./messages";
 
 const REASONS: PurchaseOrderWriteFailure[] = [
   "invalid", "forbidden", "not_found", "invalid_reference", "not_draft",
-  "invalid_transition", "reserved_receiving_status", "failed",
+  "invalid_transition", "reserved_receiving_status", "product_type_changed", "failed",
 ];
 
 describe("purchase order messages", () => {
@@ -66,3 +67,18 @@ describe("purchase order messages", () => {
     expect(purchaseOrderFailureState({ reason: "invalid" }, [])).toEqual({ error: PURCHASE_ORDER_FAILURE_MESSAGES.invalid });
   });
 });
+
+describe("ordering refused for retyped inventory products", () => {
+  const base = "One or more inventory products have changed type since this purchase order was created. Restore their product type before marking the purchase order as ordered.";
+  it("uses the friendly message and names affected lines when known", () => {
+    expect(PURCHASE_ORDER_FAILURE_MESSAGES[purchaseOrderWriteFailure("setPurchaseOrderStatus", { code: "ST006" })]).toBe(base);
+    expect(purchaseOrderStatusFailureMessage("product_type_changed")).toBe(base);
+    expect(purchaseOrderStatusFailureMessage("product_type_changed", [2])).toBe(`${base} Affected line: 2.`);
+    expect(purchaseOrderStatusFailureMessage("product_type_changed", [1, 3])).toBe(`${base} Affected lines: 1, 3.`);
+  });
+  it("leaves other status messages unchanged and is not a stale failure", () => {
+    expect(purchaseOrderStatusFailureMessage("invalid_transition", [1])).toBe(PURCHASE_ORDER_FAILURE_MESSAGES.invalid_transition);
+    expect(isStaleFailure("product_type_changed")).toBe(false);
+  });
+});
+

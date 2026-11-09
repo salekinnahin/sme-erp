@@ -1,7 +1,8 @@
 export type GoodsReceiptFailure =
   | "not_found" | "not_receivable" | "line_not_found" | "service"
   | "over_receiving" | "fully_received" | "conflict" | "invalid_date"
-  | "invalid_quantity" | "forbidden" | "invalid" | "unknown_product_type" | "failed";
+  | "invalid_quantity" | "forbidden" | "invalid" | "unknown_product_type"
+  | "product_not_inventory" | "failed";
 
 /** Allowlisted SQLSTATEs; never send database details to a future UI. */
 export function goodsReceiptFailure(error: { code?: string }): GoodsReceiptFailure {
@@ -15,6 +16,7 @@ export function goodsReceiptFailure(error: { code?: string }): GoodsReceiptFailu
     case "GR006": return "unknown_product_type";
     case "GR007": case "22007": case "22008": return "invalid_date";
     case "GR008": return "invalid_quantity";
+    case "ST004": return "product_not_inventory"; // Stock posting: product retyped away from inventory.
     case "40001": case "40P01": case "55P03": return "conflict";
     case "42501": return "forbidden";
     case "22023": case "22003": case "22P02": case "23514": case "23502": return "invalid";
@@ -34,5 +36,6 @@ export const GOODS_RECEIPT_MESSAGES: Record<GoodsReceiptFailure, string> = {
   forbidden: "You do not have permission to receive goods in this organization.",
   invalid: "Check the receipt details and select 1 to 100 different purchase order lines.",
   unknown_product_type: "This historical order needs its product types reconciled before receiving.",
+  product_not_inventory: "This product is no longer classified as inventory. Restore its type before receiving inventory goods.",
   failed: "Could not record the goods receipt. Please try again.",
 };

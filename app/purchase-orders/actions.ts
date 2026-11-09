@@ -15,6 +15,7 @@ import {
   PURCHASE_ORDER_FAILURE_MESSAGES,
   UNREADABLE_ITEMS_ERROR,
   isStaleFailure,
+  purchaseOrderStatusFailureMessage,
   purchaseOrderFailureState,
   type PurchaseOrderFormState,
 } from "@/lib/purchase-orders/messages";
@@ -150,7 +151,7 @@ export async function setPurchaseOrderStatusAction(
       revalidatePath("/purchase-orders");
       revalidatePath(`/purchase-orders/${purchaseOrderId}`);
     }
-    return { error: PURCHASE_ORDER_FAILURE_MESSAGES[result.reason] };
+    return { error: purchaseOrderStatusFailureMessage(result.reason, result.affectedLines) };
   }
 
   revalidatePath("/purchase-orders");

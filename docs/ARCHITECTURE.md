@@ -191,7 +191,7 @@ No server-only secret, such as a service-role key, is used yet. If one is ever n
 ## Not Yet Implemented
 
 - Invitations, member management, role changes
-- ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders`, `sales_order_items`, `invoices` and `invoice_items` (no stock or payments yet)
+- ERP domain tables other than `customers`, `vendors`, `products`, `product_categories`, `quotations`, `quotation_items`, `sales_orders`, `sales_order_items`, `invoices` and `invoice_items` (later modules have their own sections below; no payments yet)
 - Automated UI / end-to-end tests
 
 ## Organization Feature Entitlements
@@ -232,6 +232,26 @@ Goods Receipt is the future source document for stock-in movements; no ledger or
 Goods Receiving Part 2 UI (DECISIONS 031): `/purchase-orders/[id]/receive` (form), `/goods-receipts` (list), `/goods-receipts/[id]` (read-only detail) and `/goods-receipts/[id]/print` (GRN). The page layer calls `lib/goods-receipts/` only; `receiving.ts` holds pure, client-safe preview rules shared by the form and `app/goods-receipts/actions.ts`, and `messages.ts` maps reasons to safe text. `list_goods_receipts()` (migration `20261104220000`, reshaped by `20261104230000`) is the single invoker read for the list and a PO's receipt history; it returns item count and the stored `received_by_name`. "Received By" is a database-side snapshot of the recorder's profile name taken at creation (DECISIONS 032); the UI never reads other members' profiles. Still no stock effect.
 
 Goods Receiving review (DECISIONS 028): only sealed receipts count in the shared summary. Receipt sealing now reconciles PO status through a private summary-derived helper, covering privileged assembly as well as the RPC. PO INSERT/UPDATE validates receiving states against that helper (`GR009`) without mutating receipts. Header insertion locks the PO and enforces eligibility and received_date >= order_date. Cheap payload checks precede the RPC lock after authorization. BEFORE TRUNCATE guards protect both receipt tables and both PO tables.
+
+## Inventory stock ledger (Part 1)
+
+Migration `20261104240000_stock_movements.sql` (DECISIONS 033) follows `20261104230000`. Stock is an immutable ledger, `stock_movements`; current stock is `SUM(quantity_delta)` per product. There is no product quantity column and no application code writes stock.
+
+```text
+create_goods_receipt() / trusted tooling
+  insert header (unsealed) -> insert items (PO-derived snapshots, over-receive checks under PO lock)
+  update sealed = true
+    AFTER trigger goods_receipts_post_stock_movements   -> +received_quantity per inventory line
+    AFTER trigger goods_receipts_reconcile_status       -> PO partially_received / received
+  commit (deferred completeness check)                  -> receipt + movements + PO status, or nothing
+```
+
+- Posting runs in the database, inside the receipt transaction, for every writer that seals a receipt. Eligibility is the receipt line's `product_type` snapshot (`inventory` only), never the live product.
+- `UNIQUE (organization_id, source_type, source_line_id)` makes posting idempotent; a BEFORE INSERT trigger derives every movement column from its sealed source line; UPDATE/DELETE/TRUNCATE are blocked.
+- Reads: `list_current_stock()` (current master data, zero-stock inventory products included, products with movements never hidden) and `list_stock_movements()` (snapshots, GR number), both STABLE SQL SECURITY INVOKER under RLS.
+- `lib/inventory/` holds read-only domain functions: `listCurrentStock()`, `getProductStock()`, `listStockMovements()`, plus list parameters, exact quantity parsing, labels and safe messages. There is intentionally no `adjustStock()` yet; future stock-changing operations (adjustments, dispatch, returns) must be database functions that insert movements with their own source types and enforce availability transactionally.
+- Product type guard (DECISIONS 034/035): locked once the product has a movement (`ST002`), cannot leave `inventory` while on an open inventory PO line (`ST003`), READ COMMITTED only (`ST005`). Posting re-checks the live type under `FOR SHARE` (`ST004`). Ordering a PO re-checks inventory-snapshot lines' live product types (`ST006`, DECISIONS 036; the status action shows the affected line numbers). Lock order: receiving and ordering take PO → product; a type change holds only the product row. The product form shows `ST002`/`ST003` as a type field error; the receive form shows `ST004` as "no longer classified as inventory".
+- Warehouses/locations are deferred: the ledger has no location column, and current stock is organization-wide.
 
 ## Organization Branding
 

@@ -47,6 +47,8 @@ const FAILURE_MESSAGES: Record<ProductWriteFailure, string> = {
   not_found: "This product could not be found.",
   duplicate: "This SKU is already used by another product.",
   invalid_category: "Choose an active category from the list.",
+  type_locked: "This product already has stock movements, so its type can no longer be changed.",
+  type_locked_open_po: "This product is used as an inventory item on an active purchase order, so its type cannot be changed.",
   failed: GENERIC_ERROR,
 };
 
@@ -92,6 +94,8 @@ function productFailureState(
     return { fieldErrors: { sku: FAILURE_MESSAGES.duplicate }, values };
   if (reason === "invalid_category")
     return { fieldErrors: { categoryId: FAILURE_MESSAGES.invalid_category }, values };
+  if (reason === "type_locked" || reason === "type_locked_open_po")
+    return { fieldErrors: { productType: FAILURE_MESSAGES[reason] }, values };
   return { error: FAILURE_MESSAGES[reason], values };
 }
 

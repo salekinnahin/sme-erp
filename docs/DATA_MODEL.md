@@ -149,9 +149,9 @@ A flat list of product categories per organization (no hierarchy).
 | `created_by` | uuid | → `auth.users(id)` on delete set null. Defaults to `auth.uid()` |
 | `created_at`, `updated_at` | timestamptz, not null | `updated_at` is maintained by the `set_updated_at` trigger |
 
-- There is **no stock quantity column**. Stock on hand will be derived from `stock_movements` (Phase 3, DECISIONS 007).
+- There is **no stock quantity column**. Stock on hand is derived from `stock_movements` (DECISIONS 007, 033); receiving never writes product rows.
 - `numeric(18,2)` rounds extra decimals on input. The app rejects more than 2 price decimals (3 for the reorder level) before writing, so only a direct API call can be rounded.
-- Product type changes are allowed while no stock data exists. Once stock movements exist, changing an inventory product with movements to another type needs a rule (DECISIONS 016).
+- `product_type` guard (trigger `products_guard_type_change`, DECISIONS 034/035): immutable once the product has a stock movement (`ST002`), and cannot leave `inventory` while the product is on an inventory-snapshot line of an `ordered`/`partially_received` PO (`ST003`; changing to `inventory` stays allowed for repair). Type changes require READ COMMITTED (`ST005`). All other fields stay editable. `list_current_stock()` still returns any product with movements, with its current `product_type`, so legacy inconsistent data is never hidden.
 - Indexes: unique `(organization_id, lower(sku))`, `(organization_id, created_at desc, id desc)`, `(organization_id, status, created_at desc, id desc)`, `(organization_id, category_id)`, `(created_by)`, and unique `(organization_id, id)` (target of the quotation items composite foreign key, added by `20261104090000_quotations.sql`).
 - Never deleted. Inactive products stay editable and visible to historical documents; future transaction forms should offer only active products.
 - Documents snapshot name, SKU, unit, description and price on their lines (DECISIONS 008); editing a product does not change them. Quotations do this since `20261104090000_quotations.sql`; orders, invoices and bills must follow.
@@ -360,7 +360,7 @@ Draft line IDs are not durable (same rule as sales orders, DECISIONS 022/023): a
 
 | Table | Notes |
 | --- | --- |
-| `goods_receipts`, `goods_receipt_lines` | Receiving creates stock movements |
+| `goods_receipts`, `goods_receipt_items` | Implemented (see Goods Receiving below). Sealing posts stock movements for inventory lines |
 | `supplier_bills`, `supplier_bill_lines` | |
 | `supplier_payments` | One row per payment transaction. No overpayment |
 
@@ -368,7 +368,7 @@ Draft line IDs are not durable (same rule as sales orders, DECISIONS 022/023): a
 
 | Table | Notes |
 | --- | --- |
-| `stock_movements` | Append-only. Each row has signed quantity, product, source document type and id, reason, and timestamp. Current stock = sum of movements. Negative resulting stock is rejected |
+| `stock_movements` | Implemented (Inventory Part 1, see below). Append-only signed ledger; current stock = sum of movements. Negative stock will be rejected by future stock-out operations |
 | `stock_adjustments` | Manual corrections that generate stock movements |
 
 ## Other
@@ -382,7 +382,7 @@ Draft line IDs are not durable (same rule as sales orders, DECISIONS 022/023): a
 
 - Invoice balance = invoice total − sum of valid customer payments.
 - Bill balance = bill total − sum of valid supplier payments.
-- Stock on hand = sum of `stock_movements.quantity` per product.
+- Stock on hand = sum of `stock_movements.quantity_delta` per product, over all recorded movements (no `occurred_on` filter).
 
 Cancelling a document uses a status change and, where relevant, reversing movements or payments. Financial rows are never deleted.
 
@@ -442,7 +442,7 @@ PO lines gain nullable `product_type` (`inventory`, `non_inventory`, `service`).
 
 One PO may have many immutable receipts. Sum items by source line for cumulative received quantities; subtract from original PO quantity for remaining. No cached received balance. Parent-row locks prevent concurrent over-receiving. The receipt transaction automatically sets partially_received/received from physical lines; receiving targets remain denied to the PO user-status RPC. Any receipt blocks PO cancellation at database level.
 
-Receipt creation is the future inventory stock-in event, with durable receipt/item source IDs. No stock movements, stock balances, mutable product quantity or financial transactions exist in this task.
+Receipt creation is the future inventory stock-in event, with durable receipt/item source IDs. No stock movements, stock balances, mutable product quantity or financial transactions exist in this task. (Superseded by Inventory Part 1, DECISIONS 033: sealing now posts movements for inventory lines.)
 
 
 Goods Receiving review (DECISIONS 028): received_date must be on/after the PO order_date, including privileged header inserts. Summaries count sealed receipt items only; sealing reconciles PO receiving status for every writer, and direct inconsistent PO states fail with GR009. Both receipt and PO headers/items reject TRUNCATE via statement triggers. The unapplied receiving migration is edited directly, as confirmed by the user.
@@ -456,3 +456,39 @@ Migration `20261104210000_organization_branding.sql` (DECISIONS 029).
 - Storage: private bucket `organization-branding` (created by the migration), 2 MiB limit, `image/png`, `image/jpeg`, `image/webp` only. One object per organization at `organizations/<organization_id>/logo` (no extension); replacing overwrites it.
 - `public.organization_logo_path(org)` and `public.organization_logo_object_org(name)`: pure path helpers shared by policies and RPCs. The parser accepts only the exact lower-case canonical key.
 - `public.set_organization_logo(org)` (owner/manager; the object must exist, else `P0002`) and `public.clear_organization_logo(org)` (owner/manager): SECURITY DEFINER, fixed search path, the only writes to these columns. API roles still have SELECT only on `organizations`.
+
+## Inventory — Stock movement ledger (Part 1, implemented)
+
+Migration `20261104240000_stock_movements.sql`, after `20261104230000_goods_receipt_received_by_snapshot.sql`. See DECISIONS 033.
+
+### `stock_movements`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid, PK | |
+| `organization_id` | uuid, not null | → `organizations(id)` |
+| `product_id` | uuid, not null | Composite FK `(organization_id, product_id)` → `products(organization_id, id)` |
+| `movement_type` | text, not null | CHECK list: `goods_receipt` (only type in Part 1) |
+| `quantity_delta` | numeric(18,3), not null | Signed: stock-in > 0, future stock-out < 0. Never 0 or NaN. `goods_receipt` must be > 0 |
+| `source_type` | text, not null | CHECK list: `goods_receipt`. Allowed `(movement_type, source_type)` pairs are a CHECK |
+| `source_id` | uuid, not null | Goods receipt id |
+| `source_line_id` | uuid, not null | Goods receipt item id; the idempotency source |
+| `goods_receipt_id`, `goods_receipt_item_id` | uuid, generated stored | Copies of `source_id` / `source_line_id` when `source_type = 'goods_receipt'`, else NULL. Composite FK `(organization_id, goods_receipt_id, goods_receipt_item_id, product_id)` → `goods_receipt_items(organization_id, goods_receipt_id, id, product_id)` (new unique key on that table) |
+| `product_name_snapshot`, `sku_snapshot`, `unit_snapshot` | text, not null | Copied from the receipt line, never from the live product |
+| `occurred_on` | date, not null | Business date = receipt `received_date`. May be in the future |
+| `created_at` | timestamptz, not null | Database insertion time (set by trigger) |
+
+- `UNIQUE (organization_id, source_type, source_line_id)`: one movement per receipt line.
+- Indexes: `(organization_id, product_id, occurred_on desc, created_at desc, id desc)`, `(organization_id, occurred_on desc, created_at desc, id desc)`, `(organization_id, source_type, source_id)`.
+- Generation: an AFTER UPDATE trigger on `goods_receipts` fires on sealing and inserts one movement per line whose receipt `product_type` snapshot is `inventory`; `non_inventory` lines create nothing. A BEFORE INSERT trigger derives every column from the sealed source line for any writer. Rows are immutable (UPDATE/DELETE/TRUNCATE blocked).
+- Existing sealed receipts were backfilled by the migration (one movement per inventory line, verified).
+- Ordering a PO (`draft → ordered`) requires every `inventory`-snapshot line's product to still be `inventory` (`ST006`, trigger `purchase_orders_validate_inventory_types`, DECISIONS 036); snapshots are not rewritten.
+- Movement derivation reads the current product row `FOR SHARE` and rejects posting (`ST004`, whole receipt rolls back) unless its current type is `inventory` (DECISIONS 035).
+- RLS: active members read; no API write grants.
+
+### Reads
+
+- `list_current_stock(organization_id, search, product_id, limit, offset)` → `product_id, product_name, sku, unit, product_type, product_status, current_quantity (text), total_count`. Rows: every current `inventory` product (active or inactive, `0.000` without movements) plus any product that has movements. Display values are current master data. Search: name or SKU, literal wildcards, Unicode trim, 100 code points. Order: name, id.
+- `list_stock_movements(organization_id, product_id, source_type, limit, offset)` → `movement_id, product_id, product_name_snapshot, sku_snapshot, unit_snapshot, movement_type, quantity_delta (text), source_type, source_id, source_line_id, source_document_number (GR number), occurred_on, created_at, total_count`. Order: `occurred_on desc, created_at desc, id desc`.
+- Both: limit clamped to 1–100 (NULL: 25), offset ≥ 0, `total_count` before paging.
+

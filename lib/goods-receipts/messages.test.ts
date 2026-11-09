@@ -28,7 +28,9 @@ describe("receive form failure messages", () => {
     const { error, fieldErrors } = receivingFailureState(reason);
     const text = `${error} ${fieldErrors?.receivedDate ?? ""}`;
     expect(text.trim().length).toBeGreaterThan(10);
-    expect(text).not.toMatch(/sqlstate|postgres|supabase|\b(GR0\d\d|P0002|42501|23514|40001)\b|stock|inventory/i);
+    expect(text).not.toMatch(/sqlstate|postgres|supabase|\b(GR0\d\d|ST0\d\d|P0002|42501|23514|40001)\b/i);
+    // Only the product-classification failure (DECISIONS 035) may mention inventory.
+    if (reason !== "product_not_inventory") expect(text).not.toMatch(/stock|inventory/i);
   });
   it("hides unknown database errors", () => {
     expect(receivingFailureState(goodsReceiptFailure({ code: "XX000" }))).toEqual({ error: "Could not record the goods receipt. Please try again." });

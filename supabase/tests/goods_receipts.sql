@@ -121,28 +121,67 @@ do $$ declare po uuid; line uuid; rid uuid; d jsonb; j jsonb; n bigint; x text; 
  perform pg_temp.expect_error(format('select public.set_purchase_order_status(%L,''cancelled'')',po),'55000');
 end $$;
 -- Keep a draft across a product type change to prove the edit token preserves type.
+-- A fresh product: it has no stock movements yet, so its master type may still change.
+reset role;
+do $$ declare p uuid; begin
+ insert into public.products(organization_id,name,sku,unit,description,product_type,purchase_price)
+ values(current_setting('test.gr_org')::uuid,'Snapshot inventory','SNAP-INV','box','PO description','inventory',1) returning id into p;
+ perform set_config('test.gr_snapshot_product',p::text,true);
+end $$;
+set local role authenticated;
 do $$ declare po uuid; begin
- po:=pg_temp.po('',jsonb_build_array(jsonb_build_object('product_id',current_setting('test.gr_inventory'),'quantity','1')));
+ po:=pg_temp.po('',jsonb_build_array(jsonb_build_object('product_id',current_setting('test.gr_snapshot_product'),'quantity','1')));
  perform set_config('test.gr_snapshot_po',po::text,true);
 end $$;
 reset role;
 -- Master mutations cannot change receiving eligibility or receipt snapshots.
 update public.products set name='Changed',description='Changed',unit='pcs',product_type='service',status='inactive'
- where id=current_setting('test.gr_inventory')::uuid;
+ where id=current_setting('test.gr_snapshot_product')::uuid;
+-- The already-received inventory product has stock movements: its type is locked
+-- (DECISIONS 034), other master fields stay editable, and neither rewrites
+-- receipt items or ledger rows.
+do $$ declare p uuid:=current_setting('test.gr_inventory')::uuid; before_items jsonb; before_ledger jsonb; begin
+ select jsonb_agg(to_jsonb(i) order by i.id) into before_items from public.goods_receipt_items i where i.product_id=p;
+ select jsonb_agg(to_jsonb(m) order by m.id) into before_ledger from public.stock_movements m where m.product_id=p;
+ if before_items is null or before_ledger is null then raise exception 'received inventory product has no receipts/movements'; end if;
+ perform pg_temp.expect_error(format('update public.products set product_type=''service'' where id=%L',p),'ST002',
+  'product type cannot change after stock movements exist');
+ update public.products set name='Changed',description='Changed',unit='pcs',status='inactive' where id=p;
+ if (select product_type from public.products where id=p)<>'inventory'
+  or (select jsonb_agg(to_jsonb(i) order by i.id) from public.goods_receipt_items i where i.product_id=p) is distinct from before_items
+  or (select jsonb_agg(to_jsonb(m) order by m.id) from public.stock_movements m where m.product_id=p) is distinct from before_ledger
+  or exists(select 1 from public.goods_receipt_items where product_id=p and (product_type<>'inventory' or product_name<>'inventory' or unit<>'box'))
+  then raise exception 'master edit rewrote receipt or ledger history'; end if;
+end $$;
 set local role authenticated;
 do $$ declare po uuid:=current_setting('test.gr_snapshot_po')::uuid; line uuid; rid uuid; d jsonb; begin
  select id into line from public.purchase_order_items where purchase_order_id=po;
  -- Fixed order date: pg_temp.receive() records 2026-11-06, and receiving
  -- before the order date is rejected (GR007) whatever the server's today is.
  perform public.update_purchase_order_draft(po,current_setting('test.gr_vendor')::uuid,date '2026-11-06',null,null,
-  jsonb_build_array(jsonb_build_object('id',line,'product_id',current_setting('test.gr_inventory'),'quantity','1')));
+  jsonb_build_array(jsonb_build_object('id',line,'product_id',current_setting('test.gr_snapshot_product'),'quantity','1')));
  select id into line from public.purchase_order_items where purchase_order_id=po;
  if (select product_type from public.purchase_order_items where id=line)<>'inventory' then raise exception 'kept line type changed'; end if;
+ -- The master was retyped to service while the PO was a draft. Ordering is
+ -- refused (DECISIONS 036): the PO stays a draft and its snapshot is kept.
+ perform pg_temp.expect_error(format('select public.set_purchase_order_status(%L,''ordered'')',po),'ST006',
+  'inventory products changed type since the purchase order lines were recorded');
+ if (select status from public.purchase_orders where id=po)<>'draft'
+  or (select product_type from public.purchase_order_items where id=line)<>'inventory' then raise exception 'rejected ordering changed PO'; end if;
+ -- Restoring the product (no line recreation) allows ordering; then it is PO-locked.
+ update public.products set product_type='inventory' where id=current_setting('test.gr_snapshot_product')::uuid;
  perform public.set_purchase_order_status(po,'ordered');
+ if (select id from public.purchase_order_items where purchase_order_id=po)<>line then raise exception 'line recreated'; end if;
+ perform pg_temp.expect_error(format('update public.products set product_type=''non_inventory'' where id=%L',current_setting('test.gr_snapshot_product')),'ST003');
  rid:=pg_temp.receive(po,line,'1');
  d:=public.get_goods_receipt(current_setting('test.gr_org')::uuid,rid);
  if d#>>'{items,0,product_type}'<>'inventory' or d#>>'{items,0,unit}'<>'box'
-  or d#>>'{items,0,product_name}'<>'inventory' or d#>>'{items,0,description}'<>'PO description' then raise exception 'new receipt used current master %',d; end if;
+  or d#>>'{items,0,product_name}'<>'Snapshot inventory' or d#>>'{items,0,description}'<>'PO description' then raise exception 'new receipt used current master %',d; end if;
+ -- The receipt's inventory snapshot (not the renamed, inactive master)
+ -- posts stock, with the receipt's snapshots.
+ if (select count(*) from public.stock_movements where source_id=rid)<>1
+  or exists(select 1 from public.stock_movements where source_id=rid and (product_name_snapshot<>'Snapshot inventory' or unit_snapshot<>'box' or quantity_delta<>1))
+  then raise exception 'snapshot receipt movement'; end if;
 end $$;
 do $$ declare po uuid; a uuid; b uuid; s uuid; rid uuid; role_user uuid; begin
  -- New order snapshots the new master type, old completed PO remains inventory.
@@ -396,7 +435,7 @@ do $$ declare o uuid:=current_setting('test.gr_org')::uuid; v uuid; v2 uuid; po 
   or (select count(*) from public.list_goods_receipts(o,'Wildx_Card'))<>0 or (select count(*) from public.list_goods_receipts(o,'d%_C'))<>3
   then raise exception 'wildcard escaping'; end if;
  -- Unicode whitespace trimmed; blank search means no filter.
- if (select count(*) from public.list_goods_receipts(o,E'  Ünïcode　 '))<>3 then raise exception 'unicode trim'; end if;
+ if (select count(*) from public.list_goods_receipts(o,E'  Ünïcode　'))<>3 then raise exception 'unicode trim'; end if;
  select count(*) into total from public.goods_receipts where organization_id=o and sealed;
  if (select count(*) from public.list_goods_receipts(o,E'    ',null,100))<>least(total,100)
   or (select max(total_count) from public.list_goods_receipts(o,E'   '))<>total then raise exception 'blank search'; end if;

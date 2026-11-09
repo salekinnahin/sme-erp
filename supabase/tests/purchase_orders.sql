@@ -98,7 +98,10 @@ begin
    raise exception 'FAIL: stock mutation dependency %',f.proname;
   end if;
  end loop;
- if to_regclass('public.stock_movements') is not null then raise exception 'Update stock regression to compare the implemented ledger'; end if;
+ -- Stock ledger exists (Inventory Part 1). Baseline compared before the first
+ -- goods receipt below: PO operations alone never create stock movements.
+ if to_regclass('public.stock_movements') is null then raise exception 'FAIL: stock ledger missing'; end if;
+ perform set_config('test.po_stock_baseline',(select count(*) from public.stock_movements)::text,true);
 end $$;
 
 set local role authenticated;
@@ -332,6 +335,10 @@ begin
  perform pg_temp.expect_error(format('update public.purchase_orders set vendor_id=%L where id=%L',current_setting('test.po_vendor_b'),current_setting('test.po_main')),'23503');
  perform pg_temp.expect_error(format('update public.purchase_order_items set product_id=%L where purchase_order_id=%L',current_setting('test.po_product_b'),current_setting('test.po_main')),'23503');
  perform pg_temp.expect_error(format('update public.purchase_order_items set organization_id=%L where purchase_order_id=%L',current_setting('test.po_org_b'),current_setting('test.po_main')),'23503');
+ -- Create/edit/order/cancel and rejected privileged PO writes moved no stock.
+ if (select count(*) from public.stock_movements)<>current_setting('test.po_stock_baseline')::bigint then
+  raise exception 'FAIL: purchase order operations created stock movements';
+ end if;
  -- Receiving states now require real receipts (Goods Receiving Part 1).
  perform public.create_goods_receipt(po,date '2026-11-06',null,
   (select jsonb_agg(jsonb_build_object('purchase_order_item_id',id,'received_quantity','1')) from public.purchase_order_items where purchase_order_id=po));

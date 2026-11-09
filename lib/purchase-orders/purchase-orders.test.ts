@@ -358,4 +358,12 @@ describe("purchase price and status RPC safeguards", () => {
     expect((await setPurchaseOrderStatus(tenant("employee"), SO_ID, "ordered")).ok).toBe(true);
     expect(rpc).toHaveBeenCalledWith("set_purchase_order_status", { p_purchase_order_id: SO_ID, p_status: "ordered" });
   });
+  it("returns the ordering-check reason with only the parsed line numbers", async () => {
+    const { setPurchaseOrderStatus } = await import("./purchase-orders");
+    rpc.mockResolvedValueOnce({ data: null, error: { code: "ST006", message: "private", details: "lines: 2,4" } });
+    expect(await setPurchaseOrderStatus(tenant("employee"), SO_ID, "ordered"))
+      .toEqual({ ok: false, reason: "product_type_changed", affectedLines: [2, 4] });
+    rpc.mockResolvedValueOnce({ data: null, error: { code: "ST006", message: "private", details: "unexpected" } });
+    expect(await setPurchaseOrderStatus(tenant("employee"), SO_ID, "ordered")).toEqual({ ok: false, reason: "product_type_changed" });
+  });
 });

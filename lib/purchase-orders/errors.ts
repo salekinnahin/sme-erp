@@ -15,6 +15,11 @@ export type PurchaseOrderWriteFailure =
   /** The status change is not allowed from the current status. */
   | "invalid_transition"
   | "reserved_receiving_status"
+  /**
+   * Ordering refused: an inventory-snapshot line's product is no longer
+   * inventory (DECISIONS 036). Restore the product type, then order again.
+   */
+  | "product_type_changed"
   | "failed";
 
 export type PurchaseOrderOperation =
@@ -44,10 +49,25 @@ export function purchaseOrderWriteFailure(
     case "42501": // reserved receiving targets never become user actions
       return error.message === "purchase order receiving status is system controlled"
         ? "reserved_receiving_status" : "forbidden";
+    case "ST006": // purchase_orders_validate_inventory_types (draft -> ordered)
+      return "product_type_changed";
     case "P0002": // no_data_found
     case "22P02": // invalid_text_representation (bad UUID)
       return "not_found";
   }
   console.error(`${operation} failed`, { code: error.code, message: error.message });
   return "failed";
+}
+
+const AFFECTED_LINES_RE = /^lines: ([1-9]\d{0,2}(?:,[1-9]\d{0,2})*)$/;
+
+/**
+ * Line numbers (sort order) reported by the ordering check, from the error
+ * detail "lines: 1,3". Anything else yields an empty list, so no database
+ * text ever reaches the UI.
+ */
+export function affectedPurchaseOrderLines(error: { code?: string; details?: unknown }): number[] {
+  if (error.code !== "ST006" || typeof error.details !== "string") return [];
+  const match = AFFECTED_LINES_RE.exec(error.details);
+  return match ? match[1].split(",").map((line) => Number.parseInt(line, 10)) : [];
 }

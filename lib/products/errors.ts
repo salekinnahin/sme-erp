@@ -11,6 +11,10 @@ export type ProductWriteFailure =
   | "duplicate"
   /** Category missing, inactive, or of another organization. */
   | "invalid_category"
+  /** The product has stock movements, so its type is fixed (DECISIONS 034). */
+  | "type_locked"
+  /** The product is on an open inventory purchase order line (DECISIONS 035). */
+  | "type_locked_open_po"
   | "failed";
 
 export function writeFailure(
@@ -28,6 +32,10 @@ export function writeFailure(
     case "22003": // numeric_value_out_of_range
     case "22023": // invalid_parameter_value
       return "invalid";
+    case "ST002": // products_guard_type_change: type change after stock movements
+      return "type_locked";
+    case "ST003": // products_guard_type_change: leaving inventory with an open inventory PO line
+      return "type_locked_open_po";
     case "42501": // insufficient_privilege, including RLS violations
       return "forbidden";
     case "P0002": // no_data_found

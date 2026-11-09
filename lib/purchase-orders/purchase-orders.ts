@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import type { TenantContext } from "@/lib/tenancy/context";
 import { isUuid } from "@/lib/validation/fields";
 import { calculateLine, calculateTotals, type LineAmounts } from "./calculations";
-import { purchaseOrderWriteFailure, type PurchaseOrderWriteFailure } from "./errors";
+import { affectedPurchaseOrderLines, purchaseOrderWriteFailure, type PurchaseOrderWriteFailure } from "./errors";
 import { PURCHASE_ORDER_STATUS_ACTIONS, canPurchaseOrder } from "./permissions";
 import {
   toPurchaseOrderRpcArgs,
@@ -83,6 +83,8 @@ export type PurchaseOrderWriteResult =
       reason: PurchaseOrderWriteFailure;
       fieldErrors?: PurchaseOrderFieldErrors;
       itemErrors?: (PurchaseOrderItemErrors | undefined)[];
+      /** Line numbers (sort order) named by the ordering check. */
+      affectedLines?: number[];
     };
 
 /** The JSON document returned by public.get_purchase_order(). */
@@ -353,7 +355,11 @@ export async function setPurchaseOrderStatus(
       p_purchase_order_id: purchaseOrderId,
       p_status: status,
     });
-    if (error) return { ok: false, reason: purchaseOrderWriteFailure("setPurchaseOrderStatus", error) };
+    if (error) {
+      const reason = purchaseOrderWriteFailure("setPurchaseOrderStatus", error);
+      const affectedLines = affectedPurchaseOrderLines(error);
+      return affectedLines.length ? { ok: false, reason, affectedLines } : { ok: false, reason };
+    }
     return { ok: true, purchaseOrderId };
   } catch (err) {
     console.error("setPurchaseOrderStatus threw", err);

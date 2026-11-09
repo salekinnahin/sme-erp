@@ -543,3 +543,95 @@ Status: accepted
 - `list_goods_receipts()` returns `item_count` (receipt lines) and `received_by_name`; the mixed-unit `total_received_quantity` and raw `created_by` are removed (dropped and recreated with unchanged invoker/RLS/search/paging/order and grants). PO receipt history shows GR number, received date, item count and received by; the main list keeps its Items column.
 
 **Consequences:** Names on receipts are as of recording time by design. Quantity, status, concurrency, sealing, cancellation, service-line, permission and stock behavior are unchanged.
+
+## 033 — Inventory Part 1: immutable stock movement ledger, posted when a Goods Receipt is sealed
+
+Date: 2026-11-10
+Status: accepted
+
+**Context:** Goods Receiving (DECISIONS 027, 028, 031, 032) records immutable physical receipts but did not affect stock. DECISIONS 007 requires stock to be derived from append-only movements. Migration `20261104230000` is already applied remotely, so this is a new forward migration only: `20261104240000_stock_movements.sql`. No Inventory UI, warehouses, adjustments, stock-out or returns.
+
+**Decision:**
+
+1. **The ledger is the only source of truth.** `stock_movements` holds signed `quantity_delta numeric(18,3)` rows. Current stock = `SUM(quantity_delta)` per product. Products have no quantity/stock/balance column, and receiving never writes a product row.
+2. **Types.** `movement_type` and `source_type` are CHECK lists, currently only `goods_receipt`. Allowed `(movement_type, source_type)` pairs and an "inbound types are positive" CHECK make future types (sale dispatch, adjustments, returns) explicit migrations. Goods receipt movements are strictly positive; zero and NaN are rejected for all types. This supersedes DECISIONS 027's tentative `purchase_receipt` / `source_item_id` naming.
+3. **Eligibility uses the receipt line's snapshot.** Only goods receipt lines whose immutable `product_type` (copied from the PO line) is `inventory` move stock. `non_inventory` lines are received but never stocked; services are never receivable. The current `products.product_type` is never consulted.
+4. **Source identity and idempotency.** `source_type = 'goods_receipt'`, `source_id = receipt id`, `source_line_id = receipt item id`. `UNIQUE (organization_id, source_type, source_line_id)` guarantees one movement per receipt line, whatever runs twice. Stored generated columns `goods_receipt_id` / `goods_receipt_item_id` (NULL for other future sources) carry a composite FK `(organization_id, goods_receipt_id, goods_receipt_item_id, product_id)` → `goods_receipt_items`, and `(organization_id, product_id)` → `products`, so a movement can never reference another tenant's product, receipt or line, even for privileged writers.
+5. **Posting point.** A SECURITY DEFINER AFTER UPDATE trigger on `goods_receipts`, firing only on the single permitted `sealed` false → true transition, posts all inventory lines. It fires before `goods_receipts_reconcile_status` (trigger name order): stock is posted, then the PO status reconciled, in the receipt's transaction. Any failure (over-receive, serialization, abort) rolls back the receipt and its movements together. No second API call; no application code writes stock. Privileged tooling that assembles and seals a valid receipt gets the same movements.
+6. **Every insert path is derived.** A BEFORE INSERT trigger looks up the source line in the same organization, requires a sealed receipt and an `inventory` snapshot (`ST001` otherwise), and overwrites product, quantity, snapshots, `occurred_on` and `created_at` from the source. A direct privileged insert therefore cannot forge a quantity or product; for an already-posted line it fails on the unique key.
+7. **Snapshots.** `product_name_snapshot`, `sku_snapshot`, `unit_snapshot` come from the receipt line (never the live product), so history stays readable after renames, SKU/unit changes or deactivation.
+8. **Dates.** `occurred_on date` = the receipt's `received_date` (a business date, no invented midnight timestamp). `created_at` = database insertion time. **Current stock includes all recorded movements regardless of `occurred_on`**, including future-dated receipts: recording the receipt is the act that acknowledges possession. No effective-dated stock in V1.
+9. **Immutability.** Row triggers block UPDATE/DELETE and a statement trigger blocks TRUNCATE for every writer (`55000`, `stock movements are immutable`). Corrections will be compensating movements in a future phase. Receipt, product and organization deletion is blocked by restrictive FKs and existing guards.
+10. **Access.** RLS: active members of the organization read (owner, manager, employee alike); disabled members and other tenants see nothing. `anon`, `authenticated` and `service_role` have no INSERT/UPDATE/DELETE/TRUNCATE; there is no generic create-movement RPC, and the posting/derivation helpers have no API execute grants.
+11. **Reads.** `list_current_stock(org, search, product_id, limit, offset)` and `list_stock_movements(org, product_id, source_type, limit, offset)` are STABLE SQL SECURITY INVOKER functions with an empty search path, RLS plus explicit organization filter, clamped paging, deterministic order and exact text quantities. Current stock groups by stable `product_id` and shows **current** product master data; movement history shows the **snapshots** and the GR number (same query, no N+1). Current stock lists every product whose current type is `inventory` (active and inactive, `0.000` before the first receipt) **plus any product that has movements** even if its type changed later, so ledger quantity is never hidden; `product_type` is returned so a future UI can flag it. Balances are text with scale 3 and are not cast back to numeric(18,3), so a balance above 10^15 is still exact. No text search on history in Part 1 (product filter only).
+12. **Negative stock.** No aggregate `>= 0` constraint on the ledger. Receipts only add stock. Preventing negative stock (DECISIONS 007) belongs to future stock-out operations, which must lock and check availability transactionally.
+13. **Backfill.** The migration installs the sealing trigger first (its creation waits for in-flight receipt writers), then posts every existing sealed receipt through the same generation function with `ON CONFLICT DO NOTHING`, then verifies the ledger against the receipts (missing, unexpected and mismatched rows) and aborts on any difference. Receipts sealed concurrently are covered by the trigger; the unique key prevents doubles in either order.
+14. **TypeScript.** `lib/inventory/` provides typed, validated readers only (`listCurrentStock`, `getProductStock`, `listStockMovements`), exact quantity strings (never JS numbers) and safe error messages. No mutation helper.
+15. **Deferred:** warehouses/locations, adjustments, transfers, reservations, sales stock-out, returns, lots/serials, costing/valuation, reorder alerts, counting and the Inventory UI. Product type changes after stock exists are still allowed (the existing receiving suite relies on that); a guard is an open decision.
+
+**Consequences:** Goods receipts now have a stock effect for inventory lines; Purchase Orders still have none (`purchase_orders.sql` asserts the ledger is untouched by PO operations). Disabling triggers by a database owner bypasses these guards, as for the existing immutable documents. Native two-session concurrency waits are not exercised by the embedded runner.
+
+## 034 — Product type is immutable once the product has a stock movement
+
+Date: 2026-11-10
+Status: accepted (supersedes DECISIONS 033 item 15 and the "type changes allowed" note of DECISIONS 016 for products with movements)
+
+**Context:** With the ledger (DECISIONS 033), retyping a stocked product would produce states like "type: service, balance: 100". Migration `20261104240000_stock_movements.sql` was not yet applied remotely (user confirmed), so the guard is added to that same migration, keeping the ledger invariants together, as with the unapplied receiving migration in DECISIONS 028. Migrations through `20261104230000` are unchanged.
+
+**Decision:**
+
+- `products_lock_type_after_stock` (BEFORE UPDATE OF `product_type`, only when the value actually changes; SECURITY DEFINER, empty search path, no API grants) rejects the change with `ST002` "product type cannot change after stock movements exist" whenever any `stock_movements` row exists for the product. It covers authenticated column updates (the normal product edit path), and privileged updates. It only reads; no recursion.
+- The locking event is a stock movement, not a receipt: products whose receipts were all `non_inventory` (no movements) and products with no movements stay retypeable in every direction.
+- Only `product_type` is locked. Name, SKU, description, category, prices, unit, reorder level (within existing rules) and active/inactive status stay editable; edits never rewrite receipt or movement snapshots.
+- Race: movement derivation takes `FOR SHARE` on the product row. A type change that is waiting on that lock re-checks for movements after the receipt commits, and is then rejected. Conversely, a type change that commits first does not block the receipt, because receipt eligibility is the PO line snapshot (DECISIONS 033).
+- `list_current_stock()` keeps returning every product that has movements whatever its current type. This still happens legitimately when a product is retyped between ordering and its first receipt (the PO snapshot says `inventory`), and for legacy or privileged-invalid data. `product_type` is returned so a UI can flag it.
+- The app maps `ST002` to `type_locked`: a field error on the product type ("This product already has stock movements, so its type can no longer be changed.").
+
+**Consequences:** `goods_receipts.sql` no longer retypes an already-received inventory product. It now asserts the rejection and unchanged receipt/ledger history, and proves receipt-snapshot eligibility with a fresh product that has no movements yet. A product whose type must truly change after stocking needs a future, explicit process (for example, zeroing stock with compensating movements and creating a new product).
+
+## 035 — Product type stays inventory during open inventory procurement; stock posting re-checks the live type
+
+Date: 2026-11-10
+Status: accepted (extends DECISIONS 034; its trigger `products_lock_type_after_stock` is replaced by `products_guard_type_change` in the same, still unapplied migration `20261104240000_stock_movements.sql`)
+
+**Context:** DECISIONS 034 locked a product's type only after its first movement. A product could still be retyped (for example to `service`) between ordering and its first receipt. The receipt then followed the PO line's `inventory` snapshot and posted stock, leaving a permanently locked service product with positive stock. The migration is still not applied remotely (user confirmed), so this closes the gap in the same migration. Migrations through `20261104230000` are unchanged.
+
+**Invariant:** no committed state has stock movements for a product whose current type is not `inventory`, except data that bypassed the guards (legacy or disabled triggers), which the reader still shows.
+
+**Decision:**
+
+- **Rule A (open procurement).** While the product is on a purchase order line with an `inventory` type snapshot whose PO is `ordered` or `partially_received`, it cannot change away from `inventory` (`ST003`). Draft, cancelled and received POs, and `non_inventory` or `service` lines, do not lock it. Changing to `inventory` is always allowed by this rule, which repairs a product that was retyped while its PO was a draft.
+- **Rule B (movements).** Unchanged from DECISIONS 034: any movement fixes the type permanently (`ST002`, checked first), even at zero balance. This also means a legacy product that already has stock under a non-inventory type cannot be retyped by normal writes.
+- **Rule C (posting compatibility).** When an inventory receipt line posts, the derivation trigger reads the current product row `FOR SHARE` and rejects with `ST004` if its type is not `inventory`. The whole receipt transaction rolls back: nothing is skipped, converted or posted. The PO and receipt snapshots remain the eligibility source and are never rewritten.
+- **Isolation.** Product type changes require READ COMMITTED (`ST005`), which is the Supabase API and SQL Editor default. Under REPEATABLE READ or SERIALIZABLE, the guard's snapshot can predate a receipt that held the product row, and a lock-only conflict raises no error, so the guard could miss its movement.
+- **Lock order.** Receiving: PO row (`FOR UPDATE`) → product row (`FOR SHARE`, posting). Type change: product row (taken by the UPDATE itself) → plain reads only. No path locks product then PO, so there is no deadlock cycle. If the receipt holds the product, the change waits and then sees the movement (`ST002`). If the change holds it, posting waits and then reads the committed type (`ST004` if it is no longer inventory). If the change rolls back, posting proceeds.
+- **Guard implementation.** `products_guard_type_change` is a BEFORE UPDATE OF `product_type` row trigger, firing only on an actual change. It is SECURITY DEFINER with an empty search path, read-only and has no API grants. It applies to every writer.
+- **Reader.** `list_current_stock()` is unchanged: rows with movements are always returned with their actual `product_type`.
+- **Errors.** Products: `ST002` → `type_locked` ("This product already has stock movements, so its type can no longer be changed."). `ST003` → `type_locked_open_po` ("This product is used as an inventory item on an active purchase order, so its type cannot be changed."). Both are shown on the type field. `ST005` → generic failure (unreachable from the app). Receiving: `ST004` → `product_not_inventory` ("This product is no longer classified as inventory. Restore its type before receiving inventory goods."). Raw database text is never shown.
+
+**Consequences:** A PO can still be ordered while a draft line's product was retyped; the receipt then fails with `ST004` until the product is restored to `inventory`. Blocking at order time is a possible future refinement. Bypassing triggers (owner `ALTER TABLE … DISABLE TRIGGER`) remains outside supported writes. Native two-session behaviour was verified locally with embedded PostgreSQL 18.6.
+
+## 036 — Ordering a purchase order re-checks inventory lines against the live product type
+
+Date: 2026-11-10
+Status: accepted (completes DECISIONS 035; same, still unapplied migration `20261104240000_stock_movements.sql`)
+
+**Context:** Under DECISIONS 035, a product could still be retyped while its PO was a draft. The PO could then be ordered with an `inventory` line that could never be received (`ST004`).
+
+**Decision:**
+
+- **Invariant.** No ordered or partially received PO has an `inventory`-snapshot line whose product's current type is not `inventory`. Data that bypassed the guards is the only exception.
+- **Enforcement point.** `purchase_orders_validate_inventory_types` is a BEFORE UPDATE OF `status` trigger on `purchase_orders`. It fires only for `draft → ordered`, runs after `purchase_orders_enforce_rules` (name order), and is SECURITY DEFINER with no API grants. It covers `set_purchase_order_status` and privileged updates; API roles have no PO write grant. It checks only lines whose snapshot is `inventory`; `non_inventory` and `service` lines are unchanged. Snapshots are never rewritten, and nothing is retyped or skipped.
+- **Error.** `ST006`, message `inventory products changed type since the purchase order lines were recorded`, detail `lines: 1,3` (PO line numbers only). The app maps it to `product_type_changed`. It shows: "One or more inventory products have changed type since this purchase order was created. Restore their product type before marking the purchase order as ordered." It appends "Affected line(s): 1, 3." only when the detail matches a strict allowlist pattern. Not a stale failure; the PO stays a draft.
+- **Repair.** Restore the product to `inventory` (allowed by DECISIONS 035), then order again. No line recreation is needed.
+- **Locking.** The trigger locks the product of every inventory-snapshot line `FOR SHARE`, in product id order, and only then tests the locked rows' types. Filtering by type inside the locking query is wrong: PostgreSQL evaluates the filter on the old snapshot first, so a row being retyped concurrently is never locked or re-read. Native race tests caught exactly this during development.
+- **Final lock order.**
+  - Receiving: PO row (`FOR UPDATE`) → product row (`FOR SHARE`, stock posting).
+  - Ordering: PO row (the status UPDATE) → product rows (`FOR SHARE`).
+  - Product type change: product row only (the UPDATE); open PO lines and movements are plain reads.
+  - No transaction locks product then PO, so there is no inversion.
+  - If a type change holds the product, ordering waits and then sees the committed type (`ST006`); if it rolls back, ordering proceeds. If ordering holds the product, the type change waits and then sees the ordered PO (`ST003`).
+  - At REPEATABLE READ or SERIALIZABLE, locking a row changed after the snapshot raises `40001`, and type changes themselves require READ COMMITTED (`ST005`).
+- `ST002`–`ST005` are unchanged. `ST004` is now reachable only for data that bypassed the guards, and remains as defence in depth.
+
+**Consequences:** `goods_receipts.sql` now expects `ST006` (PO stays draft, snapshot kept), then repair, ordering and receipt. `ST004` is tested with deliberately constructed invalid data in a rolled-back subtransaction. The native embedded-PostgreSQL harness covers the races; sequential SQL suites cannot detect filter-before-lock regressions.
