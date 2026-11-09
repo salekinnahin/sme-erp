@@ -574,4 +574,15 @@ Native **local** two-session check (repeat on a local Supabase or test project b
 3. With `update products set product_type='service'` uncommitted in session A (product on a draft PO), `set_purchase_order_status(<po>,'ordered')` in session B must wait, then fail `ST006` (`lines: …`) after A commits. If A rolls back, the order succeeds. Reversed (ordering uncommitted first), the type change waits and then fails `ST003`.
 4. Neither order may deadlock.
 
-API probe (signed-in member of A, then tenant B and a disabled A member): `rpc('list_current_stock', { p_organization_id: <A> })` and `rpc('list_stock_movements', { p_organization_id: <A> })` return A's data only for the active member; `from('stock_movements').insert(...)`, `.update(...)`, `.delete()` fail for every role. There is no Inventory UI yet.
+API probe (signed-in member of A, then tenant B and a disabled A member): `rpc('list_current_stock', { p_organization_id: <A> })` and `rpc('list_stock_movements', { p_organization_id: <A> })` return A's data only for the active member; `from('stock_movements').insert(...)`, `.update(...)`, `.delete()` fail for every role. The read-only Inventory UI is covered in § 12.1.
+
+### 12.1 Inventory UI — current stock and movement history (manual)
+
+Read-only screens (DECISIONS 037); no stock-writing controls exist. Signed in as an active member of organization A (repeat as owner, manager, employee):
+
+1. `/inventory` lists A's inventory products, including zero-stock (`0.000`) and inactive ones, with exact 3-decimal balances. Search by name/SKU (`?q=`) and paging keep their URL values. No Adjust/Stock in/Stock out/New stock control.
+2. A product whose type was changed away from inventory by privileged/legacy data (if such a fixture exists) stays listed with "Stock history exists"; its detail shows "Inventory history mismatch" and the unchanged balance.
+3. `/inventory/<A product id>` shows the current balance + unit, "View product" opens `/products/<id>`, and the movement history shows signed quantities (`+30.000`), "Goods receipt" and the GR number linking to `/goods-receipts/<id>`. Rename the product: the summary shows the new name; movement rows keep the recorded name/SKU.
+4. `/inventory/<B product id>`, `/inventory/<random uuid>`, `/inventory/not-a-uuid` and `/inventory/<A service product without movements>` all show the same "Product stock not found" page. Adding `?organization_id=<B>` or `?product=<B product id>` to either URL changes nothing.
+5. A disabled member of A, or a signed-out user, cannot open `/inventory` (sign-in redirect / workspace error, no stock data).
+6. Narrow viewports (375 / 768 / 1024 px): no page-wide horizontal scroll; current stock and movement quantity/GR reference stay visible in the stacked cards; sidebar/drawer works.

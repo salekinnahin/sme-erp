@@ -635,3 +635,23 @@ Status: accepted (completes DECISIONS 035; same, still unapplied migration `2026
 - `ST002`–`ST005` are unchanged. `ST004` is now reachable only for data that bypassed the guards, and remains as defence in depth.
 
 **Consequences:** `goods_receipts.sql` now expects `ST006` (PO stays draft, snapshot kept), then repair, ordering and receipt. `ST004` is tested with deliberately constructed invalid data in a rolled-back subtransaction. The native embedded-PostgreSQL harness covers the races; sequential SQL suites cannot detect filter-before-lock regressions.
+
+## 037 — Inventory UI is read-only: current stock list and per-product movement history
+
+Date: 2026-11-10
+Status: accepted (UI only; no migration, SQL, RLS or ledger change)
+
+**Context:** The stock ledger (DECISIONS 033–036) had read RPCs and `lib/inventory/` readers but no screens. Stock may only change through business documents (Goods Receipts today).
+
+**Decision:**
+
+- Routes `/inventory` (current stock) and `/inventory/[productId]` (product stock + movement history). Navigation: Inventory → Current stock, Products. No Adjust Stock, Stock In/Out, Edit Balance, warehouses, transfers or valuation, and no dead links for them.
+- **Read-only.** No Server Action, form or client fetch writes stock. Every active role (owner, manager, employee) can view; the organization is always the session tenant (`requireTenant()`), never a URL value. Only `q` (search) and `page` are read from the list URL; the detail page uses the route's validated product ID and `page` only.
+- **Current vs historical data.** Current stock rows and the detail summary show CURRENT product master data (name, SKU, unit, type, status) with the ledger balance. Movement rows show each movement's SNAPSHOTS (name, SKU, unit) under "Recorded product"; they are never replaced with current master data.
+- **Visibility.** Zero-stock and inactive inventory products stay visible. A product whose current type is not `inventory` but has movements stays visible with a text "Stock history exists" badge (list) and an "Inventory history mismatch" warning (detail). No repair action; the balance is shown unchanged.
+- **Exact quantities.** Balances and movement quantities are formatted as strings (`lib/inventory/display.ts`, reusing the exact `exactQuantity` grouping): 3 decimals, thousands separators, sign from the database string (`+30.000`, `-10.000`). No JS number conversion. No aggregate across products (mixed units are meaningless to sum), no KPI cards, no valuation.
+- **Labels and links.** Movement and source types map through the central label tables; source links come only from the explicit source-type mapping in `lib/inventory/movements.ts` (`goods_receipt` → `/goods-receipts/[id]`), whose route re-checks tenant access.
+- Malformed, unknown, other-tenant and non-stock product IDs all show the same not-found page. A movement read failure shows a safe inline message while the stock summary still renders; list read failures use the route error boundary.
+- Deferred: movement-type filter (only one type exists), category/reorder level on inventory screens (not returned by `list_current_stock`; no extra query added), low-stock alerts.
+
+**Consequences:** Future stock-changing features (adjustments, sales stock-out) need their own source types, database functions and a deliberate UI decision; the read screens pick up new movement types by adding labels and a source-link mapping.

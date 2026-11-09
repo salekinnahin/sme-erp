@@ -1,6 +1,6 @@
 import type { OrganizationFeatureKey } from "@/lib/organizations/feature-keys";
 
-export type NavIcon = "overview" | "customers" | "quotation" | "order" | "invoice" | "vendors" | "purchase" | "receipt" | "products" | "settings";
+export type NavIcon = "overview" | "customers" | "quotation" | "order" | "invoice" | "vendors" | "purchase" | "receipt" | "stock" | "products" | "settings";
 export type NavItem = { href: string; label: string; icon: NavIcon };
 export type NavGroup = { label: string; items: readonly NavItem[]; feature?: OrganizationFeatureKey };
 
@@ -18,7 +18,11 @@ export const NAVIGATION: readonly NavGroup[] = [
     { href: "/purchase-orders", label: "Purchase orders", icon: "purchase" },
     { href: "/goods-receipts", label: "Goods receipts", icon: "receipt" },
   ] },
-  { label: "Inventory", items: [{ href: "/products", label: "Products", icon: "products" }] },
+  // Inventory is read-only in this phase: stock changes only through business documents.
+  { label: "Inventory", items: [
+    { href: "/inventory", label: "Current stock", icon: "stock" },
+    { href: "/products", label: "Products", icon: "products" },
+  ] },
   // No rental route exists. Even entitled organizations must never see a dead link.
   { label: "Rental", feature: "rentals", items: [] },
   { label: "Settings", items: [{ href: "/settings/organization", label: "Organization", icon: "settings" }] },

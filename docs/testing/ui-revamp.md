@@ -2,6 +2,14 @@
 
 This UI task preserves domain behavior (DECISIONS 030). Preserve all preceding branding work. Do not run SQL or contact remote Supabase for this verification.
 
+## Inventory UI (current stock + movement history) — 2026-11-10
+
+Read-only screens on the existing system only (DECISIONS 037): PageHeader, FilterToolbar, DataTable, SectionCard, MetadataList, EmptyState, StatusBadge/Badge and ListPagination. No new CSS: both tables reuse `.receiving-table`, so at ≤ 767 px rows become stacked cards with labelled values (each cell keeps value + unit / name + SKU in one wrapper). Nav: Inventory → Current stock (`/inventory`), Products. `/inventory` is a proxy-protected prefix. `lib/ui/inventory.test.ts` (29 checks) renders list, detail, not-found and error boundary with synthetic data; `lib/inventory/display.test.ts` covers exact formatting, labels and hrefs.
+
+Visual checks actually performed (2026-11-10): the real pages rendered with synthetic fixtures inside the real `AppFrame` and the built CSS, screenshotted with headless Chrome. Headless Chrome clamps windows to 500 px, so 375 px was checked inside a 375 px iframe. Measured page scroll width equals viewport width at 375, 768, 1024 and 1440 px for the list, detail, type-mismatch detail and zero-stock/empty-history detail. Fixed during QA: mobile movement cards split "+30.000" from its unit and the recorded name from its SKU; tablet list broke short SKUs and misaligned the mismatch badge.
+
+Residual: with the synthetic maximum balance (`999,999,999,999,999.999`) plus a mismatch badge, the list table at 768–1024 px scrolls horizontally inside its labelled, focusable table region (page itself does not overflow); realistic balances fit. Not checked: a signed-in browser against real Supabase data, keyboard tab order/focus rings in a live browser, the mobile drawer interaction on these routes. See `docs/testing/tenant-isolation.md` § 12.1.
+
 ## Goods Receiving Part 2 UI — 2026-11-07
 
 New screens use the existing system only: PageHeader actions, SectionCard, DataTable, MetadataList, DocumentSummary rail, EmptyState, Badge, a read-only detail with no confirmation dialogs, and `DocumentBrandHeader` for the GRN. One new CSS block, `.receiving-table`: Remaining / Receive now columns carry the emphasis; at ≤ 767 px the same table (one input per line) renders as stacked line cards with labelled values. Nav gains "Goods receipts" under Purchases (route exists); `/goods-receipts/<id>/print` bypasses the shell like the other prints. `lib/ui/goods-receipts.test.ts` renders the PO receiving integration, receive page (desktop/mobile markup, terminal states), list, read-only detail and print with synthetic data. Pending manual browser checks: receive form keyboard/mobile cards at 375 px, inline error focus, GRN print preview/A4 and logo. See `docs/testing/tenant-isolation.md` § 10.1.

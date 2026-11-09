@@ -9,6 +9,7 @@ const PATHS: Record<NavIcon | "menu" | "close" | "arrow" | "empty" | "logout", s
   vendors: "M3 21V8l9-5 9 5v13H3z M9 21v-8h6v8 M7 9h.01 M17 9h.01",
   purchase: "M3 3h2l3 12h11l3-8H6 M10 20h.01 M18 20h.01",
   receipt: "M3 9l9-5 9 5v11H3z M3 9h18 M8 14h8 M8 17h5",
+  stock: "M4 20h16 M6 20V10h4v10 M14 20V4h4v16",
   products: "M12 3l9 5v9l-9 5-9-5V8z M3 8l9 5 9-5 M12 13v9 M7.5 5.5l9 5",
   settings: "M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
   menu: "M4 6h16 M4 12h16 M4 18h16",

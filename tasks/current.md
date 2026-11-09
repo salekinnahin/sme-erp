@@ -1,5 +1,25 @@
 # Current Task
 
+## Inventory UI – Current Stock + Movement History (2026-11-10)
+
+Read-only Inventory screens on the completed ledger backend (DECISIONS 037). No stock writes, adjustments, warehouses, sales stock-out, valuation or backend change.
+
+- Routes: `/inventory` (current stock: Product, SKU, Unit, Type, Status, Current stock; `q` search on name/SKU; 25/page; zero-stock and inactive visible; non-inventory products with stock history flagged "Stock history exists") and `/inventory/[productId]` (current-master summary with balance + unit, View product, type-mismatch warning, movement history 25/page newest first with signed exact quantity, "Goods receipt" label, GR link and recorded snapshot name/SKU; empty state "No stock movements yet"). Not-found for malformed/unknown/other-tenant/non-stock IDs; error boundary for list failures; inline safe message for movement failures.
+- Nav: Inventory → Current stock, Products. `/inventory` added to the proxy's protected prefixes.
+- `lib/inventory/display.ts`: pure exact-string quantity/sign formatting (reuses `exactQuantity`), labels, unit label, hrefs, page links. No changes to readers, RPCs, migrations, SQL tests or RLS.
+- Search param is `q` (same as every other list and the existing `parseCurrentStockParams`), not `search`.
+
+### Verification (local only)
+
+- [x] `npm test`: **1404 passed / 85 files** (50 new: 29 page checks in `lib/ui/inventory.test.ts`, 19 in `lib/inventory/display.test.ts`, 2 navigation).
+- [x] `npm run lint`; `npx tsc --noEmit` (after `next typegen`); `npm run build` (both routes built).
+- [x] No SQL change, so no SQL suites run.
+- [x] Fixture visual pass (headless Chrome, real AppFrame + built CSS) at 375/768/1024/1440: details and residual risks in `docs/testing/ui-revamp.md`.
+- [ ] Manual: signed-in checks in `docs/testing/tenant-isolation.md` § 12.1 (requires the still-unapplied `20261104240000_stock_movements.sql` and its follow-ups).
+- No remote Supabase access, commit or push.
+
+## Previous task
+
 ## Inventory / Stock Movement Ledger – Part 1 Backend (2026-11-10)
 
 Immutable stock ledger with Goods Receipt stock-in (DECISIONS 033). No Inventory UI, warehouses, adjustments, sales stock-out or returns.

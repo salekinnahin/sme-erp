@@ -9,6 +9,7 @@ const PROTECTED_PREFIXES = [
   "/customers",
   "/vendors",
   "/products",
+  "/inventory",
   "/quotations",
   "/sales-orders",
   "/invoices",

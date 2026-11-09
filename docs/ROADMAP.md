@@ -31,7 +31,7 @@ Version 1 delivery order. Each phase builds on the previous one. Check items off
 ## Phase 3 — Inventory Core
 
 - [x] Stock movements — Part 1 backend (DECISIONS 033; migration `20261104240000_stock_movements.sql`): immutable signed ledger, Goods Receipt stock-in for inventory lines at sealing, idempotent per receipt line, backfill of existing receipts, RLS/read-only API, `list_current_stock()` / `list_stock_movements()` reads and `lib/inventory/` readers. No UI
-- [ ] Stock on hand / movement history UI (backend reads ready)
+- [x] Inventory UI — current stock + movement history (DECISIONS 037): read-only `/inventory` list (search, pagination, zero-stock/inactive visible, type-mismatch flag) and `/inventory/[productId]` (current balance, snapshot movement history, GR links). No stock writes, warehouses or valuation. No backend change
 - [ ] Stock adjustments (compensating movements)
 - [ ] Sales stock-out with transactional negative-stock prevention
 - Deferred: warehouses/locations, transfers, reservations, returns, lots/serials, costing/valuation

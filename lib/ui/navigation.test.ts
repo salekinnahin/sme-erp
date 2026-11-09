@@ -9,7 +9,10 @@ describe("workspace navigation", () => {
     expect(groups.find((group) => group.label === "Sales")?.items.map((item) => item.label)).toEqual(["Customers", "Quotations", "Sales orders", "Invoices"]);
     const links = groups.flatMap((group) => group.items);
     expect(groups.find((group) => group.label === "Purchases")?.items.map((item) => item.label)).toEqual(["Vendors", "Purchase orders", "Goods receipts"]);
-    expect(new Set(links.map((item) => item.href)).size).toBe(10);
+    // Inventory is read-only: current stock and product master data only (no adjustments, warehouses or transfers yet).
+    expect(groups.find((group) => group.label === "Inventory")?.items.map((item) => [item.label, item.href])).toEqual([["Current stock", "/inventory"], ["Products", "/products"]]);
+    expect(links.some((item) => /adjust|warehouse|transfer/i.test(`${item.label} ${item.href}`))).toBe(false);
+    expect(new Set(links.map((item) => item.href)).size).toBe(11);
     for (const item of links) expect(existsSync(`app${item.href}/page.tsx`), item.href).toBe(true);
   });
   it.each([undefined, false, true])("does not invent a Rental route for entitlement %s", (rentals) => {
@@ -26,6 +29,10 @@ describe("workspace navigation", () => {
   it.each(["/products", "/products/new", "/products/categories", "/products/abc/edit"])("keeps Products active at %s", (path) => {
     expect(isActiveRoute(path, "/products")).toBe(true);
     expect(activeNavItem(path)?.label).toBe("Products");
+  });
+  it.each(["/inventory", "/inventory/abc"])("keeps Current stock active at %s", (path) => {
+    expect(activeNavItem(path)?.label).toBe("Current stock");
+    expect(isActiveRoute("/inventory-other", "/inventory")).toBe(false);
   });
   it("matches segment boundaries instead of similarly prefixed routes", () => {
     expect(isActiveRoute("/products-other", "/products")).toBe(false);
